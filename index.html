@@ -160,7 +160,7 @@
     </div>
   </div>
 </div>
-
+ 
 <script>
 const SUPPLIERS = ["Sysco", "WebstaurantStore", "Rinella Produce"];
 const FUZZY_THRESHOLD = 0.78;
@@ -168,14 +168,14 @@ const MAX_INVOICES = 30;
 const PROXY = "https://se-proxy.kibbles816.workers.dev/";
 const SB_URL = "https://wvpuheqhffwzwftsxgek.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind2cHVoZXFoZmZ3endmdHN4Z2VrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMzg2MTUsImV4cCI6MjA4OTYxNDYxNX0.wvahzyaOWcCmbEaO2vzYXNMSODYu-BqRNyev17A0fOY";
-
+ 
 let currentSupplier = SUPPLIERS[0];
 let currentView = "upload";
 let pendingFile = null;
 let priceChart = null;
 let selectedItem = null;
 let cachedData = {};
-
+ 
 // ─── SUPABASE ─────────────────────────────────────────────────────────────────
 async function sbFetch(path, options = {}) {
   const res = await fetch(SB_URL + "/rest/v1/" + path, {
@@ -190,7 +190,7 @@ async function sbFetch(path, options = {}) {
   const text = await res.text();
   return text ? JSON.parse(text) : null;
 }
-
+ 
 async function loadAllData() {
   try {
     const rows = await sbFetch("invoices?select=supplier,data&order=supplier");
@@ -205,11 +205,11 @@ async function loadAllData() {
     cachedData = {};
   }
 }
-
+ 
 function getInvoices(supplier) {
   return (cachedData[supplier] || []).sort((a, b) => new Date(a.date) - new Date(b.date));
 }
-
+ 
 async function saveInvoice(supplier, date, items) {
   const existing = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id,data");
   const match = (existing || []).find(r => r.data && r.data.date === date);
@@ -227,20 +227,20 @@ async function saveInvoice(supplier, date, items) {
   }
   await loadAllData();
 }
-
+ 
 async function deleteInvoice(supplier, date) {
   const rows = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id,data");
   const match = (rows || []).find(r => r.data && r.data.date === date);
   if (match) await sbFetch("invoices?id=eq." + match.id, { method: "DELETE" });
   await loadAllData();
 }
-
+ 
 async function clearSupplierData(supplier) {
   const rows = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id");
   for (const row of (rows || [])) await sbFetch("invoices?id=eq." + row.id, { method: "DELETE" });
   await loadAllData();
 }
-
+ 
 // ─── FUZZY MATCHING ───────────────────────────────────────────────────────────
 function levenshtein(a, b) {
   const m = a.length, n = b.length;
@@ -260,7 +260,7 @@ function findMatch(name, items) {
   for (const item of items) { const s = similarity(name, item.name); if (s > bestScore) { bestScore = s; best = item; } }
   return bestScore >= FUZZY_THRESHOLD ? best : null;
 }
-
+ 
 // ─── API CALL ─────────────────────────────────────────────────────────────────
 async function extractItems(base64) {
   const res = await fetch(PROXY, {
@@ -280,7 +280,7 @@ async function extractItems(base64) {
   const text = (data.content || []).find(b => b.type === "text")?.text || "[]";
   try { return JSON.parse(text.replace(/```json|```/g, "").trim()); } catch { return []; }
 }
-
+ 
 // ─── COMPARE ──────────────────────────────────────────────────────────────────
 function compareInvoices(previous, current) {
   const changes = [];
@@ -291,7 +291,7 @@ function compareInvoices(previous, current) {
   }
   return changes;
 }
-
+ 
 function getConsecutiveIncreases(itemName, invoices) {
   const prices = [];
   for (const inv of invoices) { const match = findMatch(itemName, inv.items); if (match) prices.push(match.price); }
@@ -299,7 +299,7 @@ function getConsecutiveIncreases(itemName, invoices) {
   for (let i = prices.length - 1; i > 0; i--) { if (prices[i] > prices[i-1]) streak++; else break; }
   return streak;
 }
-
+ 
 // ─── FILE HANDLING ────────────────────────────────────────────────────────────
 function startProcess(file) {
   if (!file || file.type !== "application/pdf") { showError("Please upload a PDF file."); return; }
@@ -334,7 +334,7 @@ async function processFile(file, date) {
 function fileToBase64(file) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
 }
-
+ 
 // ─── RENDER RESULTS ───────────────────────────────────────────────────────────
 function renderResults(items, changes, isFirst, date) {
   const container = document.getElementById("results");
@@ -357,7 +357,7 @@ function renderResults(items, changes, isFirst, date) {
   }
   container.innerHTML = html;
 }
-
+ 
 function itemRow(name, unit, oldPrice, price, pct, trending) {
   let badge = '';
   if (trending) badge = '<span class="badge badge-trend">trending up</span>';
@@ -367,7 +367,7 @@ function itemRow(name, unit, oldPrice, price, pct, trending) {
   const pricesHtml = oldPrice !== null ? '<span class="row-prices">$' + Number(oldPrice).toFixed(2) + ' → $' + Number(price).toFixed(2) + '</span>' : '<span class="row-price">$' + Number(price).toFixed(2) + '</span>';
   return '<div class="row"><span class="row-name" title="' + esc(name) + '">' + esc(name) + '</span><span class="row-unit">' + esc(unit||'') + '</span>' + pricesHtml + badge + '</div>';
 }
-
+ 
 // ─── TRENDS VIEW ──────────────────────────────────────────────────────────────
 function renderTrends() {
   const invoices = getInvoices(currentSupplier);
@@ -379,10 +379,10 @@ function renderTrends() {
   const allItems = {};
   for (const inv of invoices) for (const item of inv.items) { const key = item.name.toLowerCase(); if (!allItems[key]) allItems[key] = { name: item.name, prices: [] }; allItems[key].prices.push(item.price); }
   const movers = Object.values(allItems).filter(i => i.prices.length >= 2).map(i => { const first = i.prices[0], last = i.prices[i.prices.length-1]; const pct = first > 0 ? ((last-first)/first)*100 : 0; return {...i, pct, first, last}; }).sort((a,b) => Math.abs(b.pct)-Math.abs(a.pct)).slice(0,10);
-  document.getElementById("movers-list").innerHTML = movers.length ? movers.map(m => { const badge = m.pct > 0 ? '<span class="badge badge-up">+' + m.pct.toFixed(1) + '%</span>' : '<span class="badge badge-down">' + m.pct.toFixed(1) + '%</span>'; return '<div class="row"><span class="row-name" title="' + esc(m.name) + '">' + esc(m.name) + '</span><span class="row-prices">$' + m.first.toFixed(2) + ' → $' + m.last.toFixed(2) + '</span>' + badge + '</div>'; }).join('') : '<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">Need at least 2 invoices to show movers.</p>';
+  document.getElementById("movers-list").innerHTML = movers.length ? movers.map(m => { const badge = m.pct > 0 ? '<span class="badge badge-up">+' + m.pct.toFixed(1) + '%</span>' : m.pct < 0 ? '<span class="badge badge-down">' + m.pct.toFixed(1) + '%</span>' : '<span class="badge badge-trend">0.0%</span>'; return '<div class="row"><span class="row-name" title="' + esc(m.name) + '">' + esc(m.name) + '</span><span class="row-prices">$' + m.first.toFixed(2) + ' → $' + m.last.toFixed(2) + '</span>' + badge + '</div>'; }).join('') : '<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">Need at least 2 invoices to show movers.</p>';
   if (!selectedItem) renderChart(null, invoices);
 }
-
+ 
 function renderChart(itemName, invoices) {
   const ctx = document.getElementById("price-chart").getContext("2d");
   if (priceChart) { priceChart.destroy(); priceChart = null; }
@@ -394,11 +394,11 @@ function renderChart(itemName, invoices) {
   for (const inv of invoices) { const match = findMatch(itemName, inv.items); if (match) { labels.push(formatDate(inv.date)); prices.push(match.price); } }
   priceChart = new Chart(ctx, { type: "line", data: { labels, datasets: [{ label: itemName, data: prices, borderColor: "#d4a853", backgroundColor: "rgba(212,168,83,0.08)", tension: 0.3, pointBackgroundColor: "#d4a853", pointRadius: 4, pointHoverRadius: 6 }] }, options: chartOptions() });
 }
-
+ 
 function chartOptions() {
   return { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => "$" + ctx.parsed.y.toFixed(2) }, backgroundColor: "#1e1e1e", titleColor: "#888", bodyColor: "#e8e0d0", borderColor: "#333", borderWidth: 1 } }, scales: { x: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 } }, grid: { color: "#1a1a1a" } }, y: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 }, callback: v => "$" + v.toFixed(2) }, grid: { color: "#1a1a1a" } } } };
 }
-
+ 
 function onItemSearch() {
   const q = document.getElementById("item-search").value.toLowerCase().trim();
   const invoices = getInvoices(currentSupplier);
@@ -413,7 +413,7 @@ function onItemSearch() {
 }
 function hideDropdown() { setTimeout(() => { document.getElementById("search-dropdown").style.display = "none"; }, 150); }
 function selectItem(name) { selectedItem = name; document.getElementById("item-search").value = name; hideDropdown(); renderChart(name, getInvoices(currentSupplier)); }
-
+ 
 // ─── HISTORY VIEW ─────────────────────────────────────────────────────────────
 function renderHistory() {
   const invoices = getInvoices(currentSupplier).slice().reverse();
@@ -426,7 +426,7 @@ async function confirmDeleteInvoice(date) {
   await deleteInvoice(currentSupplier, date);
   renderHistory(); renderTabs(); updateStatus();
 }
-
+ 
 // ─── UI HELPERS ───────────────────────────────────────────────────────────────
 function setView(v) {
   currentView = v;
@@ -437,11 +437,11 @@ function setView(v) {
   if (v === "trends") renderTrends();
   if (v === "history") renderHistory();
 }
-
+ 
 function renderTabs() {
   document.getElementById("supplier-tabs").innerHTML = SUPPLIERS.map(s => '<button class="tab ' + (s === currentSupplier ? 'active' : '') + '" onclick="selectSupplier(\'' + s + '\')">' + s + (cachedData[s]?.length ? '<span class="dot">●</span>' : '') + '</button>').join('');
 }
-
+ 
 async function selectSupplier(s) {
   currentSupplier = s; selectedItem = null;
   document.getElementById("results").innerHTML = "";
@@ -451,14 +451,14 @@ async function selectSupplier(s) {
   if (currentView === "trends") renderTrends();
   if (currentView === "history") renderHistory();
 }
-
+ 
 function updateStatus() {
   const invoices = getInvoices(currentSupplier);
   document.getElementById("status-text").textContent = invoices.length ? invoices.length + " invoice" + (invoices.length > 1 ? "s" : "") + " saved for " + currentSupplier : "No data yet for " + currentSupplier;
   document.getElementById("clear-btn").style.display = invoices.length ? "block" : "none";
   document.getElementById("upload-label").textContent = "Drop " + currentSupplier + " invoice PDF here";
 }
-
+ 
 async function clearSupplier() {
   if (!confirm("Delete ALL saved invoices for " + currentSupplier + "? This cannot be undone.")) return;
   await clearSupplierData(currentSupplier);
@@ -467,7 +467,7 @@ async function clearSupplier() {
   if (currentView === "trends") renderTrends();
   if (currentView === "history") renderHistory();
 }
-
+ 
 function onDragOver(e) { e.preventDefault(); document.getElementById("upload-zone").classList.add("drag"); }
 function onDragLeave() { document.getElementById("upload-zone").classList.remove("drag"); }
 function onDrop(e) { e.preventDefault(); onDragLeave(); startProcess(e.dataTransfer.files[0]); }
@@ -476,7 +476,7 @@ function showError(msg) { const el = document.getElementById("error"); el.textCo
 function hideError() { document.getElementById("error").style.display = "none"; }
 function formatDate(d) { try { return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-
+ 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 loadAllData().then(() => { renderTabs(); updateStatus(); });
 </script>
