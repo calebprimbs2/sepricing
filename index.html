@@ -276,7 +276,6 @@ async function extractItems(base64) {
 const res = await fetch("https://se-proxy.kibbles816.workers.dev/", {    method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": API_KEY,
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
