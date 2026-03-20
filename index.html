@@ -60,17 +60,22 @@
   .summary-label { font-size: 9px; letter-spacing: 1.5px; color: var(--dim); text-transform: uppercase; margin-top: 3px; }
   .section { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 16px; margin-bottom: 12px; }
   .section-title { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--dim); margin-bottom: 12px; }
-  .row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1c1c1c; gap: 8px; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1c1c1c; gap: 8px; flex-wrap: wrap; }
   .row:last-child { border-bottom: none; }
   .row-name { font-size: 12px; color: #c8c0b0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-unit { font-size: 10px; color: var(--dim); flex-shrink: 0; }
   .row-prices { font-size: 11px; color: #666; flex-shrink: 0; }
   .row-price { font-size: 12px; color: var(--gold); flex-shrink: 0; }
+  .row-impact { font-size: 10px; flex-shrink: 0; font-weight: 500; }
+  .impact-up { color: var(--red); }
+  .impact-down { color: var(--green); }
   .badge { display: inline-block; padding: 2px 6px; border-radius: 2px; font-size: 10px; letter-spacing: 0.5px; flex-shrink: 0; }
   .badge-up { background: rgba(220,80,80,0.12); color: var(--red); border: 1px solid rgba(220,80,80,0.25); }
   .badge-down { background: rgba(80,180,120,0.12); color: var(--green); border: 1px solid rgba(80,180,120,0.25); }
   .badge-new { background: rgba(100,160,220,0.12); color: var(--blue); border: 1px solid rgba(100,160,220,0.25); }
-  .badge-trend { background: rgba(224,140,58,0.12); color: var(--orange); border: 1px solid rgba(224,140,58,0.25); }
+  .badge-trend-up { background: rgba(220,80,80,0.12); color: var(--red); border: 1px solid rgba(220,80,80,0.25); }
+  .badge-trend-down { background: rgba(80,180,120,0.12); color: var(--green); border: 1px solid rgba(80,180,120,0.25); }
+  .badge-neutral { background: rgba(224,140,58,0.12); color: var(--orange); border: 1px solid rgba(224,140,58,0.25); }
   details summary { font-size: 10px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; cursor: pointer; user-select: none; padding: 8px 0; list-style: none; }
   details summary::before { content: '▶ '; font-size: 8px; }
   details[open] summary::before { content: '▼ '; }
@@ -140,6 +145,14 @@
         <div class="section-title">Biggest Movers (Total % Change)</div>
         <div id="movers-list" class="movers-list"></div>
       </div>
+      <div class="section">
+        <div class="section-title">Trending Up (4%+ over 4+ invoices)</div>
+        <div id="trending-up-list"></div>
+      </div>
+      <div class="section">
+        <div class="section-title">Trending Down (4%+ over 4+ invoices)</div>
+        <div id="trending-down-list"></div>
+      </div>
     </div>
   </div>
   <div id="view-history" style="display:none">
@@ -160,37 +173,33 @@
     </div>
   </div>
 </div>
- 
+
 <script>
 const SUPPLIERS = ["Sysco", "WebstaurantStore", "Rinella Produce"];
 const FUZZY_THRESHOLD = 0.78;
 const MAX_INVOICES = 30;
+const TREND_MIN_INVOICES = 4;
+const TREND_PCT_THRESHOLD = 4;
 const PROXY = "https://se-proxy.kibbles816.workers.dev/";
 const SB_URL = "https://wvpuheqhffwzwftsxgek.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind2cHVoZXFoZmZ3endmdHN4Z2VrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMzg2MTUsImV4cCI6MjA4OTYxNDYxNX0.wvahzyaOWcCmbEaO2vzYXNMSODYu-BqRNyev17A0fOY";
- 
+
 let currentSupplier = SUPPLIERS[0];
 let currentView = "upload";
 let pendingFile = null;
 let priceChart = null;
 let selectedItem = null;
 let cachedData = {};
- 
-// ─── SUPABASE ─────────────────────────────────────────────────────────────────
+
 async function sbFetch(path, options = {}) {
   const res = await fetch(SB_URL + "/rest/v1/" + path, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SB_KEY,
-      "Authorization": "Bearer " + SB_KEY,
-      ...(options.headers || {})
-    }
+    headers: { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY, ...(options.headers || {}) }
   });
   const text = await res.text();
   return text ? JSON.parse(text) : null;
 }
- 
+
 async function loadAllData() {
   try {
     const rows = await sbFetch("invoices?select=supplier,data&order=supplier");
@@ -200,16 +209,13 @@ async function loadAllData() {
       result[row.supplier].push(row.data);
     }
     cachedData = result;
-  } catch(e) {
-    console.error("Failed to load data:", e);
-    cachedData = {};
-  }
+  } catch(e) { console.error("Failed to load data:", e); cachedData = {}; }
 }
- 
+
 function getInvoices(supplier) {
   return (cachedData[supplier] || []).sort((a, b) => new Date(a.date) - new Date(b.date));
 }
- 
+
 async function saveInvoice(supplier, date, items) {
   const existing = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id,data");
   const match = (existing || []).find(r => r.data && r.data.date === date);
@@ -218,30 +224,27 @@ async function saveInvoice(supplier, date, items) {
   } else {
     await sbFetch("invoices", { method: "POST", headers: { "Prefer": "return=minimal" }, body: JSON.stringify({ supplier, data: { date, items } }) });
   }
-  // Trim to MAX_INVOICES
   const all = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id,data");
   if (all && all.length > MAX_INVOICES) {
     const sorted = all.sort((a, b) => new Date(a.data.date) - new Date(b.data.date));
-    const toDelete = sorted.slice(0, sorted.length - MAX_INVOICES);
-    for (const row of toDelete) await sbFetch("invoices?id=eq." + row.id, { method: "DELETE" });
+    for (const row of sorted.slice(0, sorted.length - MAX_INVOICES)) await sbFetch("invoices?id=eq." + row.id, { method: "DELETE" });
   }
   await loadAllData();
 }
- 
+
 async function deleteInvoice(supplier, date) {
   const rows = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id,data");
   const match = (rows || []).find(r => r.data && r.data.date === date);
   if (match) await sbFetch("invoices?id=eq." + match.id, { method: "DELETE" });
   await loadAllData();
 }
- 
+
 async function clearSupplierData(supplier) {
   const rows = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id");
   for (const row of (rows || [])) await sbFetch("invoices?id=eq." + row.id, { method: "DELETE" });
   await loadAllData();
 }
- 
-// ─── FUZZY MATCHING ───────────────────────────────────────────────────────────
+
 function levenshtein(a, b) {
   const m = a.length, n = b.length;
   const dp = Array.from({length: m+1}, (_, i) => Array.from({length: n+1}, (_, j) => i === 0 ? j : j === 0 ? i : 0));
@@ -260,8 +263,20 @@ function findMatch(name, items) {
   for (const item of items) { const s = similarity(name, item.name); if (s > bestScore) { bestScore = s; best = item; } }
   return bestScore >= FUZZY_THRESHOLD ? best : null;
 }
- 
-// ─── API CALL ─────────────────────────────────────────────────────────────────
+
+function linearTrend(prices) {
+  const n = prices.length;
+  if (n < TREND_MIN_INVOICES) return null;
+  const meanX = (n - 1) / 2;
+  const meanY = prices.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) { num += (i - meanX) * (prices[i] - meanY); den += (i - meanX) ** 2; }
+  if (den === 0) return null;
+  const slope = num / den;
+  const totalPct = prices[0] > 0 ? ((prices[n-1] - prices[0]) / prices[0]) * 100 : 0;
+  return { slope, totalPct, count: n };
+}
+
 async function extractItems(base64) {
   const res = await fetch(PROXY, {
     method: "POST",
@@ -280,27 +295,22 @@ async function extractItems(base64) {
   const text = (data.content || []).find(b => b.type === "text")?.text || "[]";
   try { return JSON.parse(text.replace(/```json|```/g, "").trim()); } catch { return []; }
 }
- 
-// ─── COMPARE ──────────────────────────────────────────────────────────────────
+
 function compareInvoices(previous, current) {
   const changes = [];
   for (const item of current) {
     const prev = findMatch(item.name, previous);
-    if (prev) { const diff = item.price - prev.price; const pct = prev.price > 0 ? (diff / prev.price) * 100 : 0; if (Math.abs(pct) >= 0.5) changes.push({ ...item, oldPrice: prev.price, pct }); }
-    else changes.push({ ...item, oldPrice: null, pct: null });
+    if (prev) {
+      const diff = item.price - prev.price;
+      const pct = prev.price > 0 ? (diff / prev.price) * 100 : 0;
+      if (Math.abs(pct) >= 0.5) changes.push({ ...item, oldPrice: prev.price, pct, dollarDiff: diff });
+    } else {
+      changes.push({ ...item, oldPrice: null, pct: null, dollarDiff: null });
+    }
   }
   return changes;
 }
- 
-function getConsecutiveIncreases(itemName, invoices) {
-  const prices = [];
-  for (const inv of invoices) { const match = findMatch(itemName, inv.items); if (match) prices.push(match.price); }
-  let streak = 0;
-  for (let i = prices.length - 1; i > 0; i--) { if (prices[i] > prices[i-1]) streak++; else break; }
-  return streak;
-}
- 
-// ─── FILE HANDLING ────────────────────────────────────────────────────────────
+
 function startProcess(file) {
   if (!file || file.type !== "application/pdf") { showError("Please upload a PDF file."); return; }
   pendingFile = file;
@@ -334,55 +344,105 @@ async function processFile(file, date) {
 function fileToBase64(file) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
 }
- 
-// ─── RENDER RESULTS ───────────────────────────────────────────────────────────
+
 function renderResults(items, changes, isFirst, date) {
   const container = document.getElementById("results");
-  const invoices = getInvoices(currentSupplier);
   let html = '<div class="results-header"><div class="results-title">' + currentSupplier + ' — ' + formatDate(date) + '</div><div class="results-count">' + items.length + ' items</div></div>';
   if (isFirst) {
-    html += '<div class="section"><p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Baseline saved. Upload the next invoice to start tracking changes.</p>' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, false)).join('') + '</div>';
+    html += '<div class="section"><p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Baseline saved. Upload the next invoice to start tracking changes.</p>' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, null)).join('') + '</div>';
   } else {
     const increases = changes.filter(c => c.pct !== null && c.pct > 0).sort((a,b) => b.pct - a.pct);
     const decreases = changes.filter(c => c.pct !== null && c.pct < 0).sort((a,b) => a.pct - b.pct);
     const newItems = changes.filter(c => c.pct === null);
-    const trending = increases.filter(c => getConsecutiveIncreases(c.name, invoices) >= 3);
-    html += '<div class="summary-grid"><div class="summary-card"><div class="summary-num" style="color:var(--red)">' + increases.length + '</div><div class="summary-label">Increases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--green)">' + decreases.length + '</div><div class="summary-label">Decreases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--blue)">' + newItems.length + '</div><div class="summary-label">New Items</div></div><div class="summary-card"><div class="summary-num" style="color:var(--orange)">' + trending.length + '</div><div class="summary-label">Trending Up</div></div></div>';
-    if (trending.length) html += '<div class="section"><div class="section-title">Trending Up 3+ Invoices</div>' + trending.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, true)).join('') + '</div>';
-    if (increases.length) html += '<div class="section"><div class="section-title">Price Increases</div>' + increases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, false)).join('') + '</div>';
-    if (decreases.length) html += '<div class="section"><div class="section-title">Price Decreases</div>' + decreases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, false)).join('') + '</div>';
-    if (newItems.length) html += '<div class="section"><div class="section-title">New Items</div>' + newItems.map(c => itemRow(c.name, c.unit, null, c.price, null, false)).join('') + '</div>';
+    html += '<div class="summary-grid"><div class="summary-card"><div class="summary-num" style="color:var(--red)">' + increases.length + '</div><div class="summary-label">Increases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--green)">' + decreases.length + '</div><div class="summary-label">Decreases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--blue)">' + newItems.length + '</div><div class="summary-label">New Items</div></div><div class="summary-card"><div class="summary-num" style="color:var(--gold)">' + changes.length + '</div><div class="summary-label">Total Changes</div></div></div>';
+    if (increases.length) html += '<div class="section"><div class="section-title">⬆ Price Increases</div>' + increases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, c.dollarDiff)).join('') + '</div>';
+    if (decreases.length) html += '<div class="section"><div class="section-title">⬇ Price Decreases</div>' + decreases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, c.dollarDiff)).join('') + '</div>';
+    if (newItems.length) html += '<div class="section"><div class="section-title">★ New Items</div>' + newItems.map(c => itemRow(c.name, c.unit, null, c.price, null, null)).join('') + '</div>';
     if (!changes.length) html += '<div class="section"><p style="font-size:12px;color:var(--muted);text-align:center;padding:8px 0">No significant price changes detected.</p></div>';
-    html += '<details><summary>All Items (' + items.length + ')</summary><div class="section" style="margin-top:10px">' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, false)).join('') + '</div></details>';
+    html += '<details><summary>All Items (' + items.length + ')</summary><div class="section" style="margin-top:10px">' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, null)).join('') + '</div></details>';
   }
   container.innerHTML = html;
 }
- 
-function itemRow(name, unit, oldPrice, price, pct, trending) {
+
+function itemRow(name, unit, oldPrice, price, pct, dollarDiff) {
   let badge = '';
-  if (trending) badge = '<span class="badge badge-trend">trending up</span>';
-  else if (pct === null && oldPrice === null) badge = '<span class="badge badge-new">new</span>';
-  else if (pct > 0) badge = '<span class="badge badge-up">+' + pct.toFixed(1) + '%</span>';
-  else if (pct < 0) badge = '<span class="badge badge-down">' + pct.toFixed(1) + '%</span>';
-  const pricesHtml = oldPrice !== null ? '<span class="row-prices">$' + Number(oldPrice).toFixed(2) + ' → $' + Number(price).toFixed(2) + '</span>' : '<span class="row-price">$' + Number(price).toFixed(2) + '</span>';
-  return '<div class="row"><span class="row-name" title="' + esc(name) + '">' + esc(name) + '</span><span class="row-unit">' + esc(unit||'') + '</span>' + pricesHtml + badge + '</div>';
+  if (pct === null && oldPrice === null) badge = '<span class="badge badge-new">new</span>';
+  else if (pct !== null && pct > 0) badge = '<span class="badge badge-up">+' + pct.toFixed(1) + '%</span>';
+  else if (pct !== null && pct < 0) badge = '<span class="badge badge-down">' + pct.toFixed(1) + '%</span>';
+  const pricesHtml = oldPrice !== null
+    ? '<span class="row-prices">$' + Number(oldPrice).toFixed(2) + ' → $' + Number(price).toFixed(2) + '</span>'
+    : '<span class="row-price">$' + Number(price).toFixed(2) + '</span>';
+  const impactHtml = dollarDiff !== null
+    ? '<span class="row-impact ' + (dollarDiff > 0 ? 'impact-up' : 'impact-down') + '">' + (dollarDiff > 0 ? '+' : '') + '$' + Math.abs(dollarDiff).toFixed(2) + '/unit</span>'
+    : '';
+  return '<div class="row"><span class="row-name" title="' + esc(name) + '">' + esc(name) + '</span><span class="row-unit">' + esc(unit||'') + '</span>' + pricesHtml + impactHtml + badge + '</div>';
 }
- 
-// ─── TRENDS VIEW ──────────────────────────────────────────────────────────────
+
 function renderTrends() {
   const invoices = getInvoices(currentSupplier);
   if (!invoices.length) {
     document.getElementById("movers-list").innerHTML = '<p class="empty-state">No invoice data yet for ' + currentSupplier + '.</p>';
+    document.getElementById("trending-up-list").innerHTML = '<p style="font-size:12px;color:var(--dim);padding:8px 0">No data yet.</p>';
+    document.getElementById("trending-down-list").innerHTML = '<p style="font-size:12px;color:var(--dim);padding:8px 0">No data yet.</p>';
     if (priceChart) { priceChart.destroy(); priceChart = null; }
     return;
   }
+
   const allItems = {};
-  for (const inv of invoices) for (const item of inv.items) { const key = item.name.toLowerCase(); if (!allItems[key]) allItems[key] = { name: item.name, prices: [] }; allItems[key].prices.push(item.price); }
-  const movers = Object.values(allItems).filter(i => i.prices.length >= 2).map(i => { const first = i.prices[0], last = i.prices[i.prices.length-1]; const pct = first > 0 ? ((last-first)/first)*100 : 0; return {...i, pct, first, last}; }).sort((a,b) => Math.abs(b.pct)-Math.abs(a.pct)).slice(0,10);
-  document.getElementById("movers-list").innerHTML = movers.length ? movers.map(m => { const badge = m.pct > 0 ? '<span class="badge badge-up">+' + m.pct.toFixed(1) + '%</span>' : m.pct < 0 ? '<span class="badge badge-down">' + m.pct.toFixed(1) + '%</span>' : '<span class="badge badge-trend">0.0%</span>'; return '<div class="row"><span class="row-name" title="' + esc(m.name) + '">' + esc(m.name) + '</span><span class="row-prices">$' + m.first.toFixed(2) + ' → $' + m.last.toFixed(2) + '</span>' + badge + '</div>'; }).join('') : '<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">Need at least 2 invoices to show movers.</p>';
+  for (const inv of invoices) {
+    for (const item of inv.items) {
+      const key = item.name.toLowerCase();
+      if (!allItems[key]) allItems[key] = { name: item.name, prices: [] };
+      allItems[key].prices.push(item.price);
+    }
+  }
+
+  // Biggest movers
+  const movers = Object.values(allItems)
+    .filter(i => i.prices.length >= 2)
+    .map(i => { const first = i.prices[0], last = i.prices[i.prices.length-1]; const pct = first > 0 ? ((last-first)/first)*100 : 0; return {...i, pct, first, last}; })
+    .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
+    .slice(0, 10);
+
+  document.getElementById("movers-list").innerHTML = movers.length
+    ? movers.map(m => {
+        const badge = m.pct > 0 ? '<span class="badge badge-up">+' + m.pct.toFixed(1) + '%</span>' : m.pct < 0 ? '<span class="badge badge-down">' + m.pct.toFixed(1) + '%</span>' : '<span class="badge badge-neutral">0.0%</span>';
+        const diff = m.last - m.first;
+        const impact = '<span class="row-impact ' + (diff >= 0 ? 'impact-up' : 'impact-down') + '">' + (diff >= 0 ? '+' : '-') + '$' + Math.abs(diff).toFixed(2) + '</span>';
+        return '<div class="row"><span class="row-name" title="' + esc(m.name) + '">' + esc(m.name) + '</span><span class="row-prices">$' + m.first.toFixed(2) + ' → $' + m.last.toFixed(2) + '</span>' + impact + badge + '</div>';
+      }).join('')
+    : '<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">Need at least 2 invoices to show movers.</p>';
+
+  // Trending up/down via linear regression
+  const trendingUp = [], trendingDown = [];
+  for (const item of Object.values(allItems)) {
+    const trend = linearTrend(item.prices);
+    if (!trend) continue;
+    if (trend.slope > 0 && trend.totalPct >= TREND_PCT_THRESHOLD) trendingUp.push({ ...item, trend });
+    else if (trend.slope < 0 && trend.totalPct <= -TREND_PCT_THRESHOLD) trendingDown.push({ ...item, trend });
+  }
+  trendingUp.sort((a, b) => b.trend.totalPct - a.trend.totalPct);
+  trendingDown.sort((a, b) => a.trend.totalPct - b.trend.totalPct);
+
+  document.getElementById("trending-up-list").innerHTML = trendingUp.length
+    ? trendingUp.map(i => {
+        const first = i.prices[0], last = i.prices[i.prices.length-1];
+        const diff = last - first;
+        return '<div class="row"><span class="row-name" title="' + esc(i.name) + '">' + esc(i.name) + '</span><span class="row-prices">$' + first.toFixed(2) + ' → $' + last.toFixed(2) + '</span><span class="row-impact impact-up">+$' + diff.toFixed(2) + '</span><span class="badge badge-trend-up">+' + i.trend.totalPct.toFixed(1) + '% / ' + i.trend.count + ' orders</span></div>';
+      }).join('')
+    : '<p style="font-size:12px;color:var(--dim);padding:8px 0">No items trending up — need 4+ invoices with 4%+ increase.</p>';
+
+  document.getElementById("trending-down-list").innerHTML = trendingDown.length
+    ? trendingDown.map(i => {
+        const first = i.prices[0], last = i.prices[i.prices.length-1];
+        const diff = last - first;
+        return '<div class="row"><span class="row-name" title="' + esc(i.name) + '">' + esc(i.name) + '</span><span class="row-prices">$' + first.toFixed(2) + ' → $' + last.toFixed(2) + '</span><span class="row-impact impact-down">-$' + Math.abs(diff).toFixed(2) + '</span><span class="badge badge-trend-down">' + i.trend.totalPct.toFixed(1) + '% / ' + i.trend.count + ' orders</span></div>';
+      }).join('')
+    : '<p style="font-size:12px;color:var(--dim);padding:8px 0">No items trending down — need 4+ invoices with 4%+ decrease.</p>';
+
   if (!selectedItem) renderChart(null, invoices);
 }
- 
+
 function renderChart(itemName, invoices) {
   const ctx = document.getElementById("price-chart").getContext("2d");
   if (priceChart) { priceChart.destroy(); priceChart = null; }
@@ -394,11 +454,11 @@ function renderChart(itemName, invoices) {
   for (const inv of invoices) { const match = findMatch(itemName, inv.items); if (match) { labels.push(formatDate(inv.date)); prices.push(match.price); } }
   priceChart = new Chart(ctx, { type: "line", data: { labels, datasets: [{ label: itemName, data: prices, borderColor: "#d4a853", backgroundColor: "rgba(212,168,83,0.08)", tension: 0.3, pointBackgroundColor: "#d4a853", pointRadius: 4, pointHoverRadius: 6 }] }, options: chartOptions() });
 }
- 
+
 function chartOptions() {
   return { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => "$" + ctx.parsed.y.toFixed(2) }, backgroundColor: "#1e1e1e", titleColor: "#888", bodyColor: "#e8e0d0", borderColor: "#333", borderWidth: 1 } }, scales: { x: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 } }, grid: { color: "#1a1a1a" } }, y: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 }, callback: v => "$" + v.toFixed(2) }, grid: { color: "#1a1a1a" } } } };
 }
- 
+
 function onItemSearch() {
   const q = document.getElementById("item-search").value.toLowerCase().trim();
   const invoices = getInvoices(currentSupplier);
@@ -413,8 +473,7 @@ function onItemSearch() {
 }
 function hideDropdown() { setTimeout(() => { document.getElementById("search-dropdown").style.display = "none"; }, 150); }
 function selectItem(name) { selectedItem = name; document.getElementById("item-search").value = name; hideDropdown(); renderChart(name, getInvoices(currentSupplier)); }
- 
-// ─── HISTORY VIEW ─────────────────────────────────────────────────────────────
+
 function renderHistory() {
   const invoices = getInvoices(currentSupplier).slice().reverse();
   const container = document.getElementById("history-list");
@@ -426,8 +485,7 @@ async function confirmDeleteInvoice(date) {
   await deleteInvoice(currentSupplier, date);
   renderHistory(); renderTabs(); updateStatus();
 }
- 
-// ─── UI HELPERS ───────────────────────────────────────────────────────────────
+
 function setView(v) {
   currentView = v;
   ["upload","trends","history"].forEach(id => {
@@ -437,11 +495,11 @@ function setView(v) {
   if (v === "trends") renderTrends();
   if (v === "history") renderHistory();
 }
- 
+
 function renderTabs() {
   document.getElementById("supplier-tabs").innerHTML = SUPPLIERS.map(s => '<button class="tab ' + (s === currentSupplier ? 'active' : '') + '" onclick="selectSupplier(\'' + s + '\')">' + s + (cachedData[s]?.length ? '<span class="dot">●</span>' : '') + '</button>').join('');
 }
- 
+
 async function selectSupplier(s) {
   currentSupplier = s; selectedItem = null;
   document.getElementById("results").innerHTML = "";
@@ -451,14 +509,14 @@ async function selectSupplier(s) {
   if (currentView === "trends") renderTrends();
   if (currentView === "history") renderHistory();
 }
- 
+
 function updateStatus() {
   const invoices = getInvoices(currentSupplier);
   document.getElementById("status-text").textContent = invoices.length ? invoices.length + " invoice" + (invoices.length > 1 ? "s" : "") + " saved for " + currentSupplier : "No data yet for " + currentSupplier;
   document.getElementById("clear-btn").style.display = invoices.length ? "block" : "none";
   document.getElementById("upload-label").textContent = "Drop " + currentSupplier + " invoice PDF here";
 }
- 
+
 async function clearSupplier() {
   if (!confirm("Delete ALL saved invoices for " + currentSupplier + "? This cannot be undone.")) return;
   await clearSupplierData(currentSupplier);
@@ -467,7 +525,7 @@ async function clearSupplier() {
   if (currentView === "trends") renderTrends();
   if (currentView === "history") renderHistory();
 }
- 
+
 function onDragOver(e) { e.preventDefault(); document.getElementById("upload-zone").classList.add("drag"); }
 function onDragLeave() { document.getElementById("upload-zone").classList.remove("drag"); }
 function onDrop(e) { e.preventDefault(); onDragLeave(); startProcess(e.dataTransfer.files[0]); }
@@ -476,8 +534,7 @@ function showError(msg) { const el = document.getElementById("error"); el.textCo
 function hideError() { document.getElementById("error").style.display = "none"; }
 function formatDate(d) { try { return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
- 
-// ─── INIT ─────────────────────────────────────────────────────────────────────
+
 loadAllData().then(() => { renderTabs(); updateStatus(); });
 </script>
 </body>
