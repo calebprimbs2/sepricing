@@ -73,9 +73,12 @@
   .badge-up { background: rgba(220,80,80,0.12); color: var(--red); border: 1px solid rgba(220,80,80,0.25); }
   .badge-down { background: rgba(80,180,120,0.12); color: var(--green); border: 1px solid rgba(80,180,120,0.25); }
   .badge-new { background: rgba(100,160,220,0.12); color: var(--blue); border: 1px solid rgba(100,160,220,0.25); }
+  .badge-unit { background: rgba(212,168,83,0.12); color: var(--gold); border: 1px solid rgba(212,168,83,0.25); }
   .badge-trend-up { background: rgba(220,80,80,0.12); color: var(--red); border: 1px solid rgba(220,80,80,0.25); }
   .badge-trend-down { background: rgba(80,180,120,0.12); color: var(--green); border: 1px solid rgba(80,180,120,0.25); }
   .badge-neutral { background: rgba(224,140,58,0.12); color: var(--orange); border: 1px solid rgba(224,140,58,0.25); }
+  .reset-btn { background: none; border: 1px solid #333; color: #555; padding: 2px 8px; cursor: pointer; font-family: inherit; font-size: 9px; letter-spacing: 1px; text-transform: uppercase; transition: all 0.15s; border-radius: 2px; flex-shrink: 0; }
+  .reset-btn:hover { border-color: var(--gold); color: var(--gold); }
   details summary { font-size: 10px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; cursor: pointer; user-select: none; padding: 8px 0; list-style: none; }
   details summary::before { content: '▶ '; font-size: 8px; }
   details[open] summary::before { content: '▼ '; }
@@ -142,8 +145,12 @@
         <canvas id="price-chart" height="200"></canvas>
       </div>
       <div class="section">
-        <div class="section-title">Biggest Movers (Total % Change)</div>
-        <div id="movers-list" class="movers-list"></div>
+        <div class="section-title">Biggest Movers — Most Recent Order</div>
+        <div id="movers-recent" class="movers-list"></div>
+      </div>
+      <div class="section">
+        <div class="section-title">Biggest Movers — Last 5 Orders</div>
+        <div id="movers-5" class="movers-list"></div>
       </div>
       <div class="section">
         <div class="section-title">Trending Up (4%+ over 4+ invoices)</div>
@@ -183,6 +190,7 @@ const TREND_PCT_THRESHOLD = 4;
 const PROXY = "https://se-proxy.kibbles816.workers.dev/";
 const SB_URL = "https://wvpuheqhffwzwftsxgek.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind2cHVoZXFoZmZ3endmdHN4Z2VrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMzg2MTUsImV4cCI6MjA4OTYxNDYxNX0.wvahzyaOWcCmbEaO2vzYXNMSODYu-BqRNyev17A0fOY";
+const BASELINES_KEY = "se_baselines_v1";
 
 let currentSupplier = SUPPLIERS[0];
 let currentView = "upload";
@@ -191,6 +199,31 @@ let priceChart = null;
 let selectedItem = null;
 let cachedData = {};
 
+// ─── BASELINES (per-item trend resets) ───────────────────────────────────────
+function loadBaselines() {
+  try { return JSON.parse(localStorage.getItem(BASELINES_KEY)) || {}; } catch { return {}; }
+}
+function saveBaselines(b) {
+  try { localStorage.setItem(BASELINES_KEY, JSON.stringify(b)); } catch {}
+}
+function getBaselineKey(supplier, itemName) {
+  return supplier + "||" + itemName.toLowerCase().trim();
+}
+function getBaseline(supplier, itemName) {
+  return loadBaselines()[getBaselineKey(supplier, itemName)] || null;
+}
+function setBaseline(supplier, itemName, invoiceIndex) {
+  const b = loadBaselines();
+  b[getBaselineKey(supplier, itemName)] = invoiceIndex;
+  saveBaselines(b);
+}
+function clearBaseline(supplier, itemName) {
+  const b = loadBaselines();
+  delete b[getBaselineKey(supplier, itemName)];
+  saveBaselines(b);
+}
+
+// ─── SUPABASE ─────────────────────────────────────────────────────────────────
 async function sbFetch(path, options = {}) {
   const res = await fetch(SB_URL + "/rest/v1/" + path, {
     ...options,
@@ -245,6 +278,7 @@ async function clearSupplierData(supplier) {
   await loadAllData();
 }
 
+// ─── FUZZY MATCHING ───────────────────────────────────────────────────────────
 function levenshtein(a, b) {
   const m = a.length, n = b.length;
   const dp = Array.from({length: m+1}, (_, i) => Array.from({length: n+1}, (_, j) => i === 0 ? j : j === 0 ? i : 0));
@@ -263,7 +297,20 @@ function findMatch(name, items) {
   for (const item of items) { const s = similarity(name, item.name); if (s > bestScore) { bestScore = s; best = item; } }
   return bestScore >= FUZZY_THRESHOLD ? best : null;
 }
+function normalizeUnit(u) {
+  if (!u) return '';
+  u = u.toUpperCase().trim();
+  if (u === 'CASE' || u === 'CS') return 'CS';
+  if (u === 'EACH' || u === 'EA') return 'EA';
+  if (u === 'LB' || u === 'LBS') return 'LB';
+  return u;
+}
+function unitsMatch(a, b) {
+  if (!a || !b) return true; // if either unknown, don't block comparison
+  return normalizeUnit(a) === normalizeUnit(b);
+}
 
+// ─── LINEAR REGRESSION ────────────────────────────────────────────────────────
 function linearTrend(prices) {
   const n = prices.length;
   if (n < TREND_MIN_INVOICES) return null;
@@ -277,6 +324,21 @@ function linearTrend(prices) {
   return { slope, totalPct, count: n };
 }
 
+// Get price history for an item respecting baseline resets
+function getItemPriceHistory(itemName, invoices, supplier) {
+  const allPrices = [];
+  for (const inv of invoices) {
+    const match = findMatch(itemName, inv.items);
+    if (match) allPrices.push({ price: match.price, unit: match.unit });
+  }
+  const baselineIdx = getBaseline(supplier, itemName);
+  if (baselineIdx !== null && baselineIdx < allPrices.length) {
+    return allPrices.slice(baselineIdx);
+  }
+  return allPrices;
+}
+
+// ─── API CALL ─────────────────────────────────────────────────────────────────
 async function extractItems(base64) {
   const res = await fetch(PROXY, {
     method: "POST",
@@ -286,31 +348,42 @@ async function extractItems(base64) {
       max_tokens: 1500,
       messages: [{ role: "user", content: [
         { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-        { type: "text", text: "This document contains a food supplier invoice from " + currentSupplier + ". It may be a clean PDF, a saved email, or a forwarded Gmail thread — ignore all email headers, forwarding info, timestamps, and Gmail chrome. Focus only on the actual order/invoice line items. Extract every food/supply product with its unit price. Rules: (1) Use the Price($) column — per-unit price NOT the extended total. (2) Some rows show two numbers stacked like NaN followed by a real number — always use the real number and ignore NaN. (3) Prices may appear as $47.49, (47.49), or ($47.49) — extract just the number. (4) Never output NaN as a price — skip if no valid price. (5) Normalize item names to clean readable format. Respond ONLY with a raw JSON array, no markdown, no backticks. Format: [{\"name\":\"item name\",\"price\":0.00,\"unit\":\"CS\"}]" }
+        { type: "text", text: "This document is a food supplier invoice from " + currentSupplier + ". It may be a PDF, saved email, or forwarded Gmail thread. Ignore all email headers, forwarding info, timestamps, and Gmail UI. Focus ONLY on the actual order line items table. Extract every food/supply product with its unit price. CRITICAL RULES: (1) The Price($) column is the per-unit price — NOT the Est. Total($) column which is price x quantity. Never use the total column. (2) Some items show two numbers stacked in the Price($) cell — one may be a contract price and one a catalog price, one may show as NaN. ALWAYS extract the real dollar number and NEVER output NaN. If both values are real numbers, use the smaller one (contract price). If one is NaN, use the other. (3) Prices appear as $47.49, 47.49, (47.49) etc — extract just the number. (4) Include the unit type exactly as shown: CS, EA, LB, GAL etc. (5) Normalize item names to clean readable English. Respond ONLY with a raw JSON array, no markdown, no backticks, no explanation. Format: [{\"name\":\"item name\",\"price\":0.00,\"unit\":\"CS\"}]. Skip any item where you cannot determine a valid non-zero numeric price." }
       ]}]
     })
   });
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
   const text = (data.content || []).find(b => b.type === "text")?.text || "[]";
-  try { return JSON.parse(text.replace(/```json|```/g, "").trim()); } catch { return []; }
+  try {
+    const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+    // Extra safety: filter out any items where price is NaN, 0, null, or absurdly high
+    return parsed.filter(i => i && typeof i.price === 'number' && !isNaN(i.price) && i.price > 0 && i.price < 10000);
+  } catch { return []; }
 }
 
+// ─── COMPARE (with unit matching) ────────────────────────────────────────────
 function compareInvoices(previous, current) {
   const changes = [];
   for (const item of current) {
     const prev = findMatch(item.name, previous);
     if (prev) {
-      const diff = item.price - prev.price;
-      const pct = prev.price > 0 ? (diff / prev.price) * 100 : 0;
-      if (Math.abs(pct) >= 0.5) changes.push({ ...item, oldPrice: prev.price, pct, dollarDiff: diff });
+      if (!unitsMatch(item.unit, prev.unit)) {
+        // Unit changed — flag it but don't show as price change
+        changes.push({ ...item, oldPrice: prev.price, pct: null, dollarDiff: null, unitChanged: true, oldUnit: prev.unit });
+      } else {
+        const diff = item.price - prev.price;
+        const pct = prev.price > 0 ? (diff / prev.price) * 100 : 0;
+        if (Math.abs(pct) >= 0.5) changes.push({ ...item, oldPrice: prev.price, pct, dollarDiff: diff, unitChanged: false });
+      }
     } else {
-      changes.push({ ...item, oldPrice: null, pct: null, dollarDiff: null });
+      changes.push({ ...item, oldPrice: null, pct: null, dollarDiff: null, unitChanged: false });
     }
   }
   return changes;
 }
 
+// ─── FILE HANDLING ────────────────────────────────────────────────────────────
 function startProcess(file) {
   if (!file || file.type !== "application/pdf") { showError("Please upload a PDF file."); return; }
   pendingFile = file;
@@ -345,28 +418,32 @@ function fileToBase64(file) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
 }
 
+// ─── RENDER RESULTS ───────────────────────────────────────────────────────────
 function renderResults(items, changes, isFirst, date) {
   const container = document.getElementById("results");
   let html = '<div class="results-header"><div class="results-title">' + currentSupplier + ' — ' + formatDate(date) + '</div><div class="results-count">' + items.length + ' items</div></div>';
   if (isFirst) {
-    html += '<div class="section"><p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Baseline saved. Upload the next invoice to start tracking changes.</p>' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, null)).join('') + '</div>';
+    html += '<div class="section"><p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Baseline saved. Upload the next invoice to start tracking changes.</p>' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, null, false, null)).join('') + '</div>';
   } else {
     const increases = changes.filter(c => c.pct !== null && c.pct > 0).sort((a,b) => b.pct - a.pct);
     const decreases = changes.filter(c => c.pct !== null && c.pct < 0).sort((a,b) => a.pct - b.pct);
-    const newItems = changes.filter(c => c.pct === null);
-    html += '<div class="summary-grid"><div class="summary-card"><div class="summary-num" style="color:var(--red)">' + increases.length + '</div><div class="summary-label">Increases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--green)">' + decreases.length + '</div><div class="summary-label">Decreases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--blue)">' + newItems.length + '</div><div class="summary-label">New Items</div></div><div class="summary-card"><div class="summary-num" style="color:var(--gold)">' + changes.length + '</div><div class="summary-label">Total Changes</div></div></div>';
-    if (increases.length) html += '<div class="section"><div class="section-title">⬆ Price Increases</div>' + increases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, c.dollarDiff)).join('') + '</div>';
-    if (decreases.length) html += '<div class="section"><div class="section-title">⬇ Price Decreases</div>' + decreases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, c.dollarDiff)).join('') + '</div>';
-    if (newItems.length) html += '<div class="section"><div class="section-title">★ New Items</div>' + newItems.map(c => itemRow(c.name, c.unit, null, c.price, null, null)).join('') + '</div>';
+    const newItems = changes.filter(c => c.pct === null && !c.unitChanged && c.oldPrice === null);
+    const unitChanges = changes.filter(c => c.unitChanged);
+    html += '<div class="summary-grid"><div class="summary-card"><div class="summary-num" style="color:var(--red)">' + increases.length + '</div><div class="summary-label">Increases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--green)">' + decreases.length + '</div><div class="summary-label">Decreases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--blue)">' + newItems.length + '</div><div class="summary-label">New Items</div></div><div class="summary-card"><div class="summary-num" style="color:var(--gold)">' + unitChanges.length + '</div><div class="summary-label">Unit Changes</div></div></div>';
+    if (increases.length) html += '<div class="section"><div class="section-title">⬆ Price Increases</div>' + increases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, c.dollarDiff, false, null)).join('') + '</div>';
+    if (decreases.length) html += '<div class="section"><div class="section-title">⬇ Price Decreases</div>' + decreases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, c.dollarDiff, false, null)).join('') + '</div>';
+    if (unitChanges.length) html += '<div class="section"><div class="section-title">⚠ Unit Changes (not price compared)</div>' + unitChanges.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, null, null, true, c.oldUnit)).join('') + '</div>';
+    if (newItems.length) html += '<div class="section"><div class="section-title">★ New Items</div>' + newItems.map(c => itemRow(c.name, c.unit, null, c.price, null, null, false, null)).join('') + '</div>';
     if (!changes.length) html += '<div class="section"><p style="font-size:12px;color:var(--muted);text-align:center;padding:8px 0">No significant price changes detected.</p></div>';
-    html += '<details><summary>All Items (' + items.length + ')</summary><div class="section" style="margin-top:10px">' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, null)).join('') + '</div></details>';
+    html += '<details><summary>All Items (' + items.length + ')</summary><div class="section" style="margin-top:10px">' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, null, false, null)).join('') + '</div></details>';
   }
   container.innerHTML = html;
 }
 
-function itemRow(name, unit, oldPrice, price, pct, dollarDiff) {
+function itemRow(name, unit, oldPrice, price, pct, dollarDiff, unitChanged, oldUnit) {
   let badge = '';
-  if (pct === null && oldPrice === null) badge = '<span class="badge badge-new">new</span>';
+  if (unitChanged) badge = '<span class="badge badge-unit">' + (oldUnit||'?') + ' → ' + (unit||'?') + '</span>';
+  else if (pct === null && oldPrice === null) badge = '<span class="badge badge-new">new</span>';
   else if (pct !== null && pct > 0) badge = '<span class="badge badge-up">+' + pct.toFixed(1) + '%</span>';
   else if (pct !== null && pct < 0) badge = '<span class="badge badge-down">' + pct.toFixed(1) + '%</span>';
   const pricesHtml = oldPrice !== null
@@ -378,69 +455,125 @@ function itemRow(name, unit, oldPrice, price, pct, dollarDiff) {
   return '<div class="row"><span class="row-name" title="' + esc(name) + '">' + esc(name) + '</span><span class="row-unit">' + esc(unit||'') + '</span>' + pricesHtml + impactHtml + badge + '</div>';
 }
 
+// ─── TRENDS VIEW ──────────────────────────────────────────────────────────────
+function resetItemBaseline(itemName) {
+  const invoices = getInvoices(currentSupplier);
+  // Find the index of the last invoice this item appeared in
+  let lastIdx = invoices.length - 1;
+  for (let i = invoices.length - 1; i >= 0; i--) {
+    const match = findMatch(itemName, invoices[i].items);
+    if (match) { lastIdx = i; break; }
+  }
+  if (confirm('Reset trend baseline for "' + itemName + '" to current price? Trend tracking will restart from this point.')) {
+    setBaseline(currentSupplier, itemName, lastIdx);
+    renderTrends();
+  }
+}
+
 function renderTrends() {
   const invoices = getInvoices(currentSupplier);
+  const noDataMsg = '<p class="empty-state">No invoice data yet for ' + currentSupplier + '.</p>';
+
   if (!invoices.length) {
-    document.getElementById("movers-list").innerHTML = '<p class="empty-state">No invoice data yet for ' + currentSupplier + '.</p>';
-    document.getElementById("trending-up-list").innerHTML = '<p style="font-size:12px;color:var(--dim);padding:8px 0">No data yet.</p>';
-    document.getElementById("trending-down-list").innerHTML = '<p style="font-size:12px;color:var(--dim);padding:8px 0">No data yet.</p>';
+    document.getElementById("movers-recent").innerHTML = noDataMsg;
+    document.getElementById("movers-5").innerHTML = noDataMsg;
+    document.getElementById("trending-up-list").innerHTML = '';
+    document.getElementById("trending-down-list").innerHTML = '';
     if (priceChart) { priceChart.destroy(); priceChart = null; }
     return;
   }
 
-  const allItems = {};
-  for (const inv of invoices) {
-    for (const item of inv.items) {
-      const key = item.name.toLowerCase();
-      if (!allItems[key]) allItems[key] = { name: item.name, prices: [] };
-      allItems[key].prices.push(item.price);
+  // ── Biggest Movers: Most Recent Order ──
+  if (invoices.length >= 2) {
+    const prev = invoices[invoices.length - 2].items;
+    const curr = invoices[invoices.length - 1].items;
+    const recentChanges = [];
+    for (const item of curr) {
+      const p = findMatch(item.name, prev);
+      if (p && unitsMatch(item.unit, p.unit)) {
+        const pct = p.price > 0 ? ((item.price - p.price) / p.price) * 100 : 0;
+        const diff = item.price - p.price;
+        if (Math.abs(pct) >= 0.5) recentChanges.push({ name: item.name, unit: item.unit, first: p.price, last: item.price, pct, diff });
+      }
     }
+    recentChanges.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+    document.getElementById("movers-recent").innerHTML = recentChanges.length
+      ? recentChanges.slice(0, 10).map(m => moverRow(m)).join('')
+      : '<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">No significant changes in the most recent order.</p>';
+  } else {
+    document.getElementById("movers-recent").innerHTML = '<p style="font-size:12px;color:var(--dim);padding:8px 0">Need at least 2 invoices.</p>';
   }
 
-  // Biggest movers
-  const movers = Object.values(allItems)
-    .filter(i => i.prices.length >= 2)
-    .map(i => { const first = i.prices[0], last = i.prices[i.prices.length-1]; const pct = first > 0 ? ((last-first)/first)*100 : 0; return {...i, pct, first, last}; })
-    .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
-    .slice(0, 10);
+  // ── Biggest Movers: Last 5 Orders ──
+  const last5 = invoices.slice(-5);
+  if (last5.length >= 2) {
+    const allItems5 = {};
+    for (const inv of last5) {
+      for (const item of inv.items) {
+        const key = item.name.toLowerCase();
+        if (!allItems5[key]) allItems5[key] = { name: item.name, unit: item.unit, prices: [] };
+        if (unitsMatch(item.unit, allItems5[key].unit)) allItems5[key].prices.push(item.price);
+      }
+    }
+    const movers5 = Object.values(allItems5)
+      .filter(i => i.prices.length >= 2)
+      .map(i => { const first = i.prices[0], last = i.prices[i.prices.length-1]; const pct = first > 0 ? ((last-first)/first)*100 : 0; const diff = last - first; return { name: i.name, unit: i.unit, first, last, pct, diff }; })
+      .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
+      .slice(0, 10);
+    document.getElementById("movers-5").innerHTML = movers5.length
+      ? movers5.map(m => moverRow(m)).join('')
+      : '<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">Not enough data yet.</p>';
+  } else {
+    document.getElementById("movers-5").innerHTML = '<p style="font-size:12px;color:var(--dim);padding:8px 0">Need at least 2 invoices.</p>';
+  }
 
-  document.getElementById("movers-list").innerHTML = movers.length
-    ? movers.map(m => {
-        const badge = m.pct > 0 ? '<span class="badge badge-up">+' + m.pct.toFixed(1) + '%</span>' : m.pct < 0 ? '<span class="badge badge-down">' + m.pct.toFixed(1) + '%</span>' : '<span class="badge badge-neutral">0.0%</span>';
-        const diff = m.last - m.first;
-        const impact = '<span class="row-impact ' + (diff >= 0 ? 'impact-up' : 'impact-down') + '">' + (diff >= 0 ? '+' : '-') + '$' + Math.abs(diff).toFixed(2) + '</span>';
-        return '<div class="row"><span class="row-name" title="' + esc(m.name) + '">' + esc(m.name) + '</span><span class="row-prices">$' + m.first.toFixed(2) + ' → $' + m.last.toFixed(2) + '</span>' + impact + badge + '</div>';
-      }).join('')
-    : '<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">Need at least 2 invoices to show movers.</p>';
+  // ── Trending Up / Down with baseline support ──
+  const allItemNames = new Set();
+  for (const inv of invoices) for (const item of inv.items) allItemNames.add(item.name);
 
-  // Trending up/down via linear regression
   const trendingUp = [], trendingDown = [];
-  for (const item of Object.values(allItems)) {
-    const trend = linearTrend(item.prices);
+  for (const name of allItemNames) {
+    const history = getItemPriceHistory(name, invoices, currentSupplier);
+    if (history.length < TREND_MIN_INVOICES) continue;
+    const prices = history.map(h => h.price);
+    const trend = linearTrend(prices);
     if (!trend) continue;
-    if (trend.slope > 0 && trend.totalPct >= TREND_PCT_THRESHOLD) trendingUp.push({ ...item, trend });
-    else if (trend.slope < 0 && trend.totalPct <= -TREND_PCT_THRESHOLD) trendingDown.push({ ...item, trend });
+    const first = prices[0], last = prices[prices.length-1];
+    if (trend.slope > 0 && trend.totalPct >= TREND_PCT_THRESHOLD) {
+      trendingUp.push({ name, first, last, trend, baselineSet: getBaseline(currentSupplier, name) !== null });
+    } else if (trend.slope < 0 && trend.totalPct <= -TREND_PCT_THRESHOLD) {
+      trendingDown.push({ name, first, last, trend, baselineSet: getBaseline(currentSupplier, name) !== null });
+    }
   }
   trendingUp.sort((a, b) => b.trend.totalPct - a.trend.totalPct);
   trendingDown.sort((a, b) => a.trend.totalPct - b.trend.totalPct);
 
   document.getElementById("trending-up-list").innerHTML = trendingUp.length
-    ? trendingUp.map(i => {
-        const first = i.prices[0], last = i.prices[i.prices.length-1];
-        const diff = last - first;
-        return '<div class="row"><span class="row-name" title="' + esc(i.name) + '">' + esc(i.name) + '</span><span class="row-prices">$' + first.toFixed(2) + ' → $' + last.toFixed(2) + '</span><span class="row-impact impact-up">+$' + diff.toFixed(2) + '</span><span class="badge badge-trend-up">+' + i.trend.totalPct.toFixed(1) + '% / ' + i.trend.count + ' orders</span></div>';
-      }).join('')
+    ? trendingUp.map(i => trendRow(i, 'up')).join('')
     : '<p style="font-size:12px;color:var(--dim);padding:8px 0">No items trending up — need 4+ invoices with 4%+ increase.</p>';
 
   document.getElementById("trending-down-list").innerHTML = trendingDown.length
-    ? trendingDown.map(i => {
-        const first = i.prices[0], last = i.prices[i.prices.length-1];
-        const diff = last - first;
-        return '<div class="row"><span class="row-name" title="' + esc(i.name) + '">' + esc(i.name) + '</span><span class="row-prices">$' + first.toFixed(2) + ' → $' + last.toFixed(2) + '</span><span class="row-impact impact-down">-$' + Math.abs(diff).toFixed(2) + '</span><span class="badge badge-trend-down">' + i.trend.totalPct.toFixed(1) + '% / ' + i.trend.count + ' orders</span></div>';
-      }).join('')
+    ? trendingDown.map(i => trendRow(i, 'down')).join('')
     : '<p style="font-size:12px;color:var(--dim);padding:8px 0">No items trending down — need 4+ invoices with 4%+ decrease.</p>';
 
   if (!selectedItem) renderChart(null, invoices);
+}
+
+function moverRow(m) {
+  const badge = m.pct > 0 ? '<span class="badge badge-up">+' + m.pct.toFixed(1) + '%</span>' : m.pct < 0 ? '<span class="badge badge-down">' + m.pct.toFixed(1) + '%</span>' : '<span class="badge badge-neutral">0.0%</span>';
+  const impact = '<span class="row-impact ' + (m.diff >= 0 ? 'impact-up' : 'impact-down') + '">' + (m.diff >= 0 ? '+' : '-') + '$' + Math.abs(m.diff).toFixed(2) + '</span>';
+  return '<div class="row"><span class="row-name" title="' + esc(m.name) + '">' + esc(m.name) + '</span><span class="row-prices">$' + m.first.toFixed(2) + ' → $' + m.last.toFixed(2) + '</span>' + impact + badge + '</div>';
+}
+
+function trendRow(i, dir) {
+  const diff = i.last - i.first;
+  const badge = dir === 'up'
+    ? '<span class="badge badge-trend-up">+' + i.trend.totalPct.toFixed(1) + '% / ' + i.trend.count + ' orders</span>'
+    : '<span class="badge badge-trend-down">' + i.trend.totalPct.toFixed(1) + '% / ' + i.trend.count + ' orders</span>';
+  const impact = '<span class="row-impact ' + (diff >= 0 ? 'impact-up' : 'impact-down') + '">' + (diff >= 0 ? '+' : '-') + '$' + Math.abs(diff).toFixed(2) + '</span>';
+  const baselineNote = i.baselineSet ? '<span style="font-size:9px;color:var(--gold);margin-right:4px">★ reset</span>' : '';
+  const resetBtn = '<button class="reset-btn" onclick="resetItemBaseline(\'' + esc(i.name) + '\')">Reset</button>';
+  return '<div class="row"><span class="row-name" title="' + esc(i.name) + '">' + esc(i.name) + '</span><span class="row-prices">$' + i.first.toFixed(2) + ' → $' + i.last.toFixed(2) + '</span>' + impact + baselineNote + badge + resetBtn + '</div>';
 }
 
 function renderChart(itemName, invoices) {
@@ -474,6 +607,7 @@ function onItemSearch() {
 function hideDropdown() { setTimeout(() => { document.getElementById("search-dropdown").style.display = "none"; }, 150); }
 function selectItem(name) { selectedItem = name; document.getElementById("item-search").value = name; hideDropdown(); renderChart(name, getInvoices(currentSupplier)); }
 
+// ─── HISTORY VIEW ─────────────────────────────────────────────────────────────
 function renderHistory() {
   const invoices = getInvoices(currentSupplier).slice().reverse();
   const container = document.getElementById("history-list");
@@ -486,6 +620,7 @@ async function confirmDeleteInvoice(date) {
   renderHistory(); renderTabs(); updateStatus();
 }
 
+// ─── UI HELPERS ───────────────────────────────────────────────────────────────
 function setView(v) {
   currentView = v;
   ["upload","trends","history"].forEach(id => {
