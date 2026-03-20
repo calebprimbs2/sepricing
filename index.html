@@ -16,9 +16,9 @@
   body { background: var(--bg); color: var(--text); font-family: 'DM Mono', monospace; min-height: 100vh; padding: 28px 20px; }
   ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #1a1a1a; } ::-webkit-scrollbar-thumb { background: #444; }
   .wrap { max-width: 720px; margin: 0 auto; }
-  .header { margin-bottom: 28px; display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
-  .header-left h1 { font-family: 'Bebas Neue', sans-serif; font-size: clamp(30px,8vw,46px); letter-spacing: 3px; color: var(--gold); line-height: 1; }
-  .header-left p { font-size: 10px; letter-spacing: 3px; color: var(--dim); text-transform: uppercase; margin-top: 3px; }
+  .header { margin-bottom: 28px; }
+  .header h1 { font-family: 'Bebas Neue', sans-serif; font-size: clamp(30px,8vw,46px); letter-spacing: 3px; color: var(--gold); line-height: 1; }
+  .header p { font-size: 10px; letter-spacing: 3px; color: var(--dim); text-transform: uppercase; margin-top: 3px; }
   .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
   .tab { background: none; border: 1px solid #333; color: var(--muted); padding: 7px 14px; cursor: pointer; font-family: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; transition: all 0.15s; border-radius: 2px; }
   .tab:hover { border-color: var(--gold); color: var(--gold); }
@@ -102,10 +102,8 @@
 <body>
 <div class="wrap">
   <div class="header">
-    <div class="header-left">
-      <h1>Sandwich Express</h1>
-      <p>Invoice Price Tracker</p>
-    </div>
+    <h1>Sandwich Express</h1>
+    <p>Invoice Price Tracker</p>
   </div>
   <div class="tabs" id="supplier-tabs"></div>
   <div class="view-toggle">
@@ -114,7 +112,7 @@
     <button class="vtab" id="vtab-history" onclick="setView('history')">History</button>
   </div>
   <div class="statusbar">
-    <span id="status-text"></span>
+    <span id="status-text">Loading...</span>
     <button class="btn btn-danger" id="clear-btn" style="display:none" onclick="clearSupplier()">Clear All Data</button>
   </div>
   <div id="view-upload">
@@ -162,29 +160,88 @@
     </div>
   </div>
 </div>
+
 <script>
-const MAX_INVOICES = 30;
 const SUPPLIERS = ["Sysco", "WebstaurantStore", "Rinella Produce"];
-const STORAGE_KEY = "se_tracker_v2";
 const FUZZY_THRESHOLD = 0.78;
+const MAX_INVOICES = 30;
+const PROXY = "https://se-proxy.kibbles816.workers.dev/";
+const SB_URL = "https://wvpuheqhffwzwftsxgek.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind2cHVoZXFoZmZ3endmdHN4Z2VrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMzg2MTUsImV4cCI6MjA4OTYxNDYxNX0.wvahzyaOWcCmbEaO2vzYXNMSODYu-BqRNyev17A0fOY";
+
 let currentSupplier = SUPPLIERS[0];
 let currentView = "upload";
 let pendingFile = null;
 let priceChart = null;
 let selectedItem = null;
-function loadData() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; } }
-function saveData(d) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); } catch {} }
-function getInvoices(supplier) { return (loadData()[supplier] || []).sort((a, b) => new Date(a.date) - new Date(b.date)); }
-function saveInvoice(supplier, date, items) {
-  const d = loadData();
-  if (!d[supplier]) d[supplier] = [];
-  d[supplier] = d[supplier].filter(inv => inv.date !== date);
-  d[supplier].push({ date, items });
-  d[supplier].sort((a, b) => new Date(a.date) - new Date(b.date));
-  if (d[supplier].length > MAX_INVOICES) d[supplier] = d[supplier].slice(-MAX_INVOICES);
-  saveData(d);
+let cachedData = {};
+
+// ─── SUPABASE ─────────────────────────────────────────────────────────────────
+async function sbFetch(path, options = {}) {
+  const res = await fetch(SB_URL + "/rest/v1/" + path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SB_KEY,
+      "Authorization": "Bearer " + SB_KEY,
+      ...(options.headers || {})
+    }
+  });
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
-function deleteInvoice(supplier, date) { const d = loadData(); if (!d[supplier]) return; d[supplier] = d[supplier].filter(inv => inv.date !== date); saveData(d); }
+
+async function loadAllData() {
+  try {
+    const rows = await sbFetch("invoices?select=supplier,data&order=supplier");
+    const result = {};
+    for (const row of (rows || [])) {
+      if (!result[row.supplier]) result[row.supplier] = [];
+      result[row.supplier].push(row.data);
+    }
+    cachedData = result;
+  } catch(e) {
+    console.error("Failed to load data:", e);
+    cachedData = {};
+  }
+}
+
+function getInvoices(supplier) {
+  return (cachedData[supplier] || []).sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+async function saveInvoice(supplier, date, items) {
+  const existing = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id,data");
+  const match = (existing || []).find(r => r.data && r.data.date === date);
+  if (match) {
+    await sbFetch("invoices?id=eq." + match.id, { method: "PATCH", body: JSON.stringify({ data: { date, items } }) });
+  } else {
+    await sbFetch("invoices", { method: "POST", headers: { "Prefer": "return=minimal" }, body: JSON.stringify({ supplier, data: { date, items } }) });
+  }
+  // Trim to MAX_INVOICES
+  const all = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id,data");
+  if (all && all.length > MAX_INVOICES) {
+    const sorted = all.sort((a, b) => new Date(a.data.date) - new Date(b.data.date));
+    const toDelete = sorted.slice(0, sorted.length - MAX_INVOICES);
+    for (const row of toDelete) await sbFetch("invoices?id=eq." + row.id, { method: "DELETE" });
+  }
+  await loadAllData();
+}
+
+async function deleteInvoice(supplier, date) {
+  const rows = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id,data");
+  const match = (rows || []).find(r => r.data && r.data.date === date);
+  if (match) await sbFetch("invoices?id=eq." + match.id, { method: "DELETE" });
+  await loadAllData();
+}
+
+async function clearSupplierData(supplier) {
+  const rows = await sbFetch("invoices?supplier=eq." + encodeURIComponent(supplier) + "&select=id");
+  for (const row of (rows || [])) await sbFetch("invoices?id=eq." + row.id, { method: "DELETE" });
+  await loadAllData();
+}
+
+// ─── FUZZY MATCHING ───────────────────────────────────────────────────────────
 function levenshtein(a, b) {
   const m = a.length, n = b.length;
   const dp = Array.from({length: m+1}, (_, i) => Array.from({length: n+1}, (_, j) => i === 0 ? j : j === 0 ? i : 0));
@@ -192,10 +249,21 @@ function levenshtein(a, b) {
     dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
   return dp[m][n];
 }
-function similarity(a, b) { a = a.toLowerCase().trim(); b = b.toLowerCase().trim(); if (a === b) return 1; const maxLen = Math.max(a.length, b.length); if (maxLen === 0) return 1; return 1 - levenshtein(a, b) / maxLen; }
-function findMatch(name, items) { let best = null, bestScore = 0; for (const item of items) { const s = similarity(name, item.name); if (s > bestScore) { bestScore = s; best = item; } } return bestScore >= FUZZY_THRESHOLD ? best : null; }
+function similarity(a, b) {
+  a = a.toLowerCase().trim(); b = b.toLowerCase().trim();
+  if (a === b) return 1;
+  const maxLen = Math.max(a.length, b.length);
+  return maxLen === 0 ? 1 : 1 - levenshtein(a, b) / maxLen;
+}
+function findMatch(name, items) {
+  let best = null, bestScore = 0;
+  for (const item of items) { const s = similarity(name, item.name); if (s > bestScore) { bestScore = s; best = item; } }
+  return bestScore >= FUZZY_THRESHOLD ? best : null;
+}
+
+// ─── API CALL ─────────────────────────────────────────────────────────────────
 async function extractItems(base64) {
-  const res = await fetch("https://se-proxy.kibbles816.workers.dev/", {
+  const res = await fetch(PROXY, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -203,7 +271,7 @@ async function extractItems(base64) {
       max_tokens: 1500,
       messages: [{ role: "user", content: [
         { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-        { type: "text", text: "This document contains a food supplier invoice from " + currentSupplier + ". It may be a clean PDF, a saved email, or a forwarded Gmail thread — ignore all email headers, forwarding info, timestamps, and Gmail chrome. Focus only on the actual order/invoice line items. Extract every food/supply product with its unit price. Rules: (1) Use the Price($) column — per-unit price NOT the extended total. (2) Some rows show two numbers stacked in the price cell like NaN followed by a real number — always use the real number and ignore NaN. (3) Prices may appear as $47.49, (47.49), or ($47.49) — extract just the number. (4) Never output NaN as a price — skip the item if no valid price exists. (5) Normalize all item names to clean consistent readable format. Respond ONLY with a raw JSON array, no markdown, no backticks, no explanation. Format: [{name:item name,price:0.00,unit:CS/EA/LB/GAL}]" }
+        { type: "text", text: "This document contains a food supplier invoice from " + currentSupplier + ". It may be a clean PDF, a saved email, or a forwarded Gmail thread — ignore all email headers, forwarding info, timestamps, and Gmail chrome. Focus only on the actual order/invoice line items. Extract every food/supply product with its unit price. Rules: (1) Use the Price($) column — per-unit price NOT the extended total. (2) Some rows show two numbers stacked like NaN followed by a real number — always use the real number and ignore NaN. (3) Prices may appear as $47.49, (47.49), or ($47.49) — extract just the number. (4) Never output NaN as a price — skip if no valid price. (5) Normalize item names to clean readable format. Respond ONLY with a raw JSON array, no markdown, no backticks. Format: [{\"name\":\"item name\",\"price\":0.00,\"unit\":\"CS\"}]" }
       ]}]
     })
   });
@@ -212,15 +280,18 @@ async function extractItems(base64) {
   const text = (data.content || []).find(b => b.type === "text")?.text || "[]";
   try { return JSON.parse(text.replace(/```json|```/g, "").trim()); } catch { return []; }
 }
+
+// ─── COMPARE ──────────────────────────────────────────────────────────────────
 function compareInvoices(previous, current) {
   const changes = [];
   for (const item of current) {
     const prev = findMatch(item.name, previous);
     if (prev) { const diff = item.price - prev.price; const pct = prev.price > 0 ? (diff / prev.price) * 100 : 0; if (Math.abs(pct) >= 0.5) changes.push({ ...item, oldPrice: prev.price, pct }); }
-    else { changes.push({ ...item, oldPrice: null, pct: null }); }
+    else changes.push({ ...item, oldPrice: null, pct: null });
   }
   return changes;
 }
+
 function getConsecutiveIncreases(itemName, invoices) {
   const prices = [];
   for (const inv of invoices) { const match = findMatch(itemName, inv.items); if (match) prices.push(match.price); }
@@ -228,7 +299,14 @@ function getConsecutiveIncreases(itemName, invoices) {
   for (let i = prices.length - 1; i > 0; i--) { if (prices[i] > prices[i-1]) streak++; else break; }
   return streak;
 }
-function startProcess(file) { if (!file || file.type !== "application/pdf") { showError("Please upload a PDF file."); return; } pendingFile = file; document.getElementById("invoice-date").value = new Date().toISOString().split("T")[0]; document.getElementById("date-modal").style.display = "flex"; }
+
+// ─── FILE HANDLING ────────────────────────────────────────────────────────────
+function startProcess(file) {
+  if (!file || file.type !== "application/pdf") { showError("Please upload a PDF file."); return; }
+  pendingFile = file;
+  document.getElementById("invoice-date").value = new Date().toISOString().split("T")[0];
+  document.getElementById("date-modal").style.display = "flex";
+}
 function cancelUpload() { pendingFile = null; document.getElementById("date-modal").style.display = "none"; document.getElementById("file-input").value = ""; }
 async function confirmDate() {
   const date = document.getElementById("invoice-date").value;
@@ -247,36 +325,39 @@ async function processFile(file, date) {
     const invoices = getInvoices(currentSupplier);
     const previous = invoices.length ? invoices[invoices.length - 1].items : [];
     const changes = previous.length ? compareInvoices(previous, items) : [];
-    saveInvoice(currentSupplier, date, items);
+    await saveInvoice(currentSupplier, date, items);
     renderResults(items, changes, previous.length === 0, date);
     renderTabs(); updateStatus();
   } catch(e) { showError(e.message || "Something went wrong."); }
   finally { showLoading(false); }
 }
-function fileToBase64(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); }); }
+function fileToBase64(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
+}
+
+// ─── RENDER RESULTS ───────────────────────────────────────────────────────────
 function renderResults(items, changes, isFirst, date) {
   const container = document.getElementById("results");
   const invoices = getInvoices(currentSupplier);
   let html = '<div class="results-header"><div class="results-title">' + currentSupplier + ' — ' + formatDate(date) + '</div><div class="results-count">' + items.length + ' items</div></div>';
   if (isFirst) {
-    html += '<div class="section"><p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Baseline saved. Upload the next invoice to start tracking changes.</p>';
-    html += items.map(i => itemRow(i.name, i.unit, null, i.price, null, false)).join('');
-    html += '</div>';
+    html += '<div class="section"><p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Baseline saved. Upload the next invoice to start tracking changes.</p>' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, false)).join('') + '</div>';
   } else {
     const increases = changes.filter(c => c.pct !== null && c.pct > 0).sort((a,b) => b.pct - a.pct);
     const decreases = changes.filter(c => c.pct !== null && c.pct < 0).sort((a,b) => a.pct - b.pct);
     const newItems = changes.filter(c => c.pct === null);
     const trending = increases.filter(c => getConsecutiveIncreases(c.name, invoices) >= 3);
     html += '<div class="summary-grid"><div class="summary-card"><div class="summary-num" style="color:var(--red)">' + increases.length + '</div><div class="summary-label">Increases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--green)">' + decreases.length + '</div><div class="summary-label">Decreases</div></div><div class="summary-card"><div class="summary-num" style="color:var(--blue)">' + newItems.length + '</div><div class="summary-label">New Items</div></div><div class="summary-card"><div class="summary-num" style="color:var(--orange)">' + trending.length + '</div><div class="summary-label">Trending Up</div></div></div>';
-    if (trending.length) { html += '<div class="section"><div class="section-title">Trending Up 3+ Invoices</div>' + trending.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, true)).join('') + '</div>'; }
-    if (increases.length) { html += '<div class="section"><div class="section-title">Price Increases</div>' + increases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, false)).join('') + '</div>'; }
-    if (decreases.length) { html += '<div class="section"><div class="section-title">Price Decreases</div>' + decreases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, false)).join('') + '</div>'; }
-    if (newItems.length) { html += '<div class="section"><div class="section-title">New Items</div>' + newItems.map(c => itemRow(c.name, c.unit, null, c.price, null, false)).join('') + '</div>'; }
-    if (!changes.length) { html += '<div class="section"><p style="font-size:12px;color:var(--muted);text-align:center;padding:8px 0">No significant price changes detected.</p></div>'; }
+    if (trending.length) html += '<div class="section"><div class="section-title">Trending Up 3+ Invoices</div>' + trending.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, true)).join('') + '</div>';
+    if (increases.length) html += '<div class="section"><div class="section-title">Price Increases</div>' + increases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, false)).join('') + '</div>';
+    if (decreases.length) html += '<div class="section"><div class="section-title">Price Decreases</div>' + decreases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, false)).join('') + '</div>';
+    if (newItems.length) html += '<div class="section"><div class="section-title">New Items</div>' + newItems.map(c => itemRow(c.name, c.unit, null, c.price, null, false)).join('') + '</div>';
+    if (!changes.length) html += '<div class="section"><p style="font-size:12px;color:var(--muted);text-align:center;padding:8px 0">No significant price changes detected.</p></div>';
     html += '<details><summary>All Items (' + items.length + ')</summary><div class="section" style="margin-top:10px">' + items.map(i => itemRow(i.name, i.unit, null, i.price, null, false)).join('') + '</div></details>';
   }
   container.innerHTML = html;
 }
+
 function itemRow(name, unit, oldPrice, price, pct, trending) {
   let badge = '';
   if (trending) badge = '<span class="badge badge-trend">trending up</span>';
@@ -286,34 +367,107 @@ function itemRow(name, unit, oldPrice, price, pct, trending) {
   const pricesHtml = oldPrice !== null ? '<span class="row-prices">$' + Number(oldPrice).toFixed(2) + ' → $' + Number(price).toFixed(2) + '</span>' : '<span class="row-price">$' + Number(price).toFixed(2) + '</span>';
   return '<div class="row"><span class="row-name" title="' + esc(name) + '">' + esc(name) + '</span><span class="row-unit">' + esc(unit||'') + '</span>' + pricesHtml + badge + '</div>';
 }
+
+// ─── TRENDS VIEW ──────────────────────────────────────────────────────────────
 function renderTrends() {
   const invoices = getInvoices(currentSupplier);
-  if (!invoices.length) { document.getElementById("movers-list").innerHTML = '<p class="empty-state">No invoice data yet for ' + currentSupplier + '.</p>'; if (priceChart) { priceChart.destroy(); priceChart = null; } return; }
+  if (!invoices.length) {
+    document.getElementById("movers-list").innerHTML = '<p class="empty-state">No invoice data yet for ' + currentSupplier + '.</p>';
+    if (priceChart) { priceChart.destroy(); priceChart = null; }
+    return;
+  }
   const allItems = {};
   for (const inv of invoices) for (const item of inv.items) { const key = item.name.toLowerCase(); if (!allItems[key]) allItems[key] = { name: item.name, prices: [] }; allItems[key].prices.push(item.price); }
-  const movers = Object.values(allItems).filter(i => i.prices.length >= 2).map(i => { const first = i.prices[0], last = i.prices[i.prices.length - 1]; const pct = first > 0 ? ((last - first) / first) * 100 : 0; return { ...i, pct, first, last }; }).sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, 10);
+  const movers = Object.values(allItems).filter(i => i.prices.length >= 2).map(i => { const first = i.prices[0], last = i.prices[i.prices.length-1]; const pct = first > 0 ? ((last-first)/first)*100 : 0; return {...i, pct, first, last}; }).sort((a,b) => Math.abs(b.pct)-Math.abs(a.pct)).slice(0,10);
   document.getElementById("movers-list").innerHTML = movers.length ? movers.map(m => { const badge = m.pct > 0 ? '<span class="badge badge-up">+' + m.pct.toFixed(1) + '%</span>' : '<span class="badge badge-down">' + m.pct.toFixed(1) + '%</span>'; return '<div class="row"><span class="row-name" title="' + esc(m.name) + '">' + esc(m.name) + '</span><span class="row-prices">$' + m.first.toFixed(2) + ' → $' + m.last.toFixed(2) + '</span>' + badge + '</div>'; }).join('') : '<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">Need at least 2 invoices to show movers.</p>';
   if (!selectedItem) renderChart(null, invoices);
 }
+
 function renderChart(itemName, invoices) {
   const ctx = document.getElementById("price-chart").getContext("2d");
   if (priceChart) { priceChart.destroy(); priceChart = null; }
-  if (!itemName || !invoices.length) { priceChart = new Chart(ctx, { type: "line", data: { labels: [], datasets: [{ data: [], borderColor: "#d4a853", backgroundColor: "rgba(212,168,83,0.08)", tension: 0.3 }] }, options: chartOptions() }); return; }
+  if (!itemName || !invoices.length) {
+    priceChart = new Chart(ctx, { type: "line", data: { labels: [], datasets: [{ data: [], borderColor: "#d4a853", backgroundColor: "rgba(212,168,83,0.08)", tension: 0.3 }] }, options: chartOptions() });
+    return;
+  }
   const labels = [], prices = [];
   for (const inv of invoices) { const match = findMatch(itemName, inv.items); if (match) { labels.push(formatDate(inv.date)); prices.push(match.price); } }
   priceChart = new Chart(ctx, { type: "line", data: { labels, datasets: [{ label: itemName, data: prices, borderColor: "#d4a853", backgroundColor: "rgba(212,168,83,0.08)", tension: 0.3, pointBackgroundColor: "#d4a853", pointRadius: 4, pointHoverRadius: 6 }] }, options: chartOptions() });
 }
-function chartOptions() { return { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => "$" + ctx.parsed.y.toFixed(2) }, backgroundColor: "#1e1e1e", titleColor: "#888", bodyColor: "#e8e0d0", borderColor: "#333", borderWidth: 1 } }, scales: { x: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 } }, grid: { color: "#1a1a1a" } }, y: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 }, callback: v => "$" + v.toFixed(2) }, grid: { color: "#1a1a1a" } } } }; }
-function onItemSearch() { const q = document.getElementById("item-search").value.toLowerCase().trim(); const invoices = getInvoices(currentSupplier); if (!q || !invoices.length) { hideDropdown(); return; } const allNames = new Set(); for (const inv of invoices) for (const item of inv.items) allNames.add(item.name); const matches = [...allNames].filter(n => n.toLowerCase().includes(q)).slice(0, 12); if (!matches.length) { hideDropdown(); return; } const dd = document.getElementById("search-dropdown"); dd.innerHTML = matches.map(n => '<div class="search-option" onmousedown="selectItem(\'' + esc(n) + '\')">' + esc(n) + '</div>').join(''); dd.style.display = "block"; }
+
+function chartOptions() {
+  return { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => "$" + ctx.parsed.y.toFixed(2) }, backgroundColor: "#1e1e1e", titleColor: "#888", bodyColor: "#e8e0d0", borderColor: "#333", borderWidth: 1 } }, scales: { x: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 } }, grid: { color: "#1a1a1a" } }, y: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 }, callback: v => "$" + v.toFixed(2) }, grid: { color: "#1a1a1a" } } } };
+}
+
+function onItemSearch() {
+  const q = document.getElementById("item-search").value.toLowerCase().trim();
+  const invoices = getInvoices(currentSupplier);
+  if (!q || !invoices.length) { hideDropdown(); return; }
+  const allNames = new Set();
+  for (const inv of invoices) for (const item of inv.items) allNames.add(item.name);
+  const matches = [...allNames].filter(n => n.toLowerCase().includes(q)).slice(0, 12);
+  if (!matches.length) { hideDropdown(); return; }
+  const dd = document.getElementById("search-dropdown");
+  dd.innerHTML = matches.map(n => '<div class="search-option" onmousedown="selectItem(\'' + esc(n) + '\')">' + esc(n) + '</div>').join('');
+  dd.style.display = "block";
+}
 function hideDropdown() { setTimeout(() => { document.getElementById("search-dropdown").style.display = "none"; }, 150); }
 function selectItem(name) { selectedItem = name; document.getElementById("item-search").value = name; hideDropdown(); renderChart(name, getInvoices(currentSupplier)); }
-function renderHistory() { const invoices = getInvoices(currentSupplier).slice().reverse(); const container = document.getElementById("history-list"); if (!invoices.length) { container.innerHTML = '<p class="empty-state">No invoices saved yet for ' + currentSupplier + '.</p>'; return; } container.innerHTML = invoices.map(inv => '<div class="history-item"><span class="history-date">' + formatDate(inv.date) + '</span><span class="history-count">' + inv.items.length + ' items</span><button class="history-del" onclick="confirmDeleteInvoice(\'' + inv.date + '\')" title="Delete">✕</button></div>').join(''); }
-function confirmDeleteInvoice(date) { if (!confirm("Delete invoice from " + formatDate(date) + "?")) return; deleteInvoice(currentSupplier, date); renderHistory(); renderTabs(); updateStatus(); }
-function setView(v) { currentView = v; ["upload","trends","history"].forEach(id => { document.getElementById("view-" + id).style.display = id === v ? "block" : "none"; document.getElementById("vtab-" + id).classList.toggle("active", id === v); }); if (v === "trends") renderTrends(); if (v === "history") renderHistory(); }
-function renderTabs() { const d = loadData(); document.getElementById("supplier-tabs").innerHTML = SUPPLIERS.map(s => '<button class="tab ' + (s === currentSupplier ? 'active' : '') + '" onclick="selectSupplier(\'' + s + '\')">' + s + (d[s]?.length ? '<span class="dot">●</span>' : '') + '</button>').join(''); }
-function selectSupplier(s) { currentSupplier = s; selectedItem = null; document.getElementById("results").innerHTML = ""; document.getElementById("error").style.display = "none"; if (document.getElementById("item-search")) document.getElementById("item-search").value = ""; renderTabs(); updateStatus(); if (currentView === "trends") renderTrends(); if (currentView === "history") renderHistory(); }
-function updateStatus() { const invoices = getInvoices(currentSupplier); document.getElementById("status-text").textContent = invoices.length ? invoices.length + " invoice" + (invoices.length > 1 ? "s" : "") + " saved for " + currentSupplier : "No data yet for " + currentSupplier; document.getElementById("clear-btn").style.display = invoices.length ? "block" : "none"; document.getElementById("upload-label").textContent = "Drop " + currentSupplier + " invoice PDF here"; }
-function clearSupplier() { if (!confirm("Delete ALL saved invoices for " + currentSupplier + "? This cannot be undone.")) return; const d = loadData(); delete d[currentSupplier]; saveData(d); document.getElementById("results").innerHTML = ""; selectedItem = null; renderTabs(); updateStatus(); if (currentView === "trends") renderTrends(); if (currentView === "history") renderHistory(); }
+
+// ─── HISTORY VIEW ─────────────────────────────────────────────────────────────
+function renderHistory() {
+  const invoices = getInvoices(currentSupplier).slice().reverse();
+  const container = document.getElementById("history-list");
+  if (!invoices.length) { container.innerHTML = '<p class="empty-state">No invoices saved yet for ' + currentSupplier + '.</p>'; return; }
+  container.innerHTML = invoices.map(inv => '<div class="history-item"><span class="history-date">' + formatDate(inv.date) + '</span><span class="history-count">' + inv.items.length + ' items</span><button class="history-del" onclick="confirmDeleteInvoice(\'' + inv.date + '\')" title="Delete">✕</button></div>').join('');
+}
+async function confirmDeleteInvoice(date) {
+  if (!confirm("Delete invoice from " + formatDate(date) + "?")) return;
+  await deleteInvoice(currentSupplier, date);
+  renderHistory(); renderTabs(); updateStatus();
+}
+
+// ─── UI HELPERS ───────────────────────────────────────────────────────────────
+function setView(v) {
+  currentView = v;
+  ["upload","trends","history"].forEach(id => {
+    document.getElementById("view-" + id).style.display = id === v ? "block" : "none";
+    document.getElementById("vtab-" + id).classList.toggle("active", id === v);
+  });
+  if (v === "trends") renderTrends();
+  if (v === "history") renderHistory();
+}
+
+function renderTabs() {
+  document.getElementById("supplier-tabs").innerHTML = SUPPLIERS.map(s => '<button class="tab ' + (s === currentSupplier ? 'active' : '') + '" onclick="selectSupplier(\'' + s + '\')">' + s + (cachedData[s]?.length ? '<span class="dot">●</span>' : '') + '</button>').join('');
+}
+
+async function selectSupplier(s) {
+  currentSupplier = s; selectedItem = null;
+  document.getElementById("results").innerHTML = "";
+  document.getElementById("error").style.display = "none";
+  if (document.getElementById("item-search")) document.getElementById("item-search").value = "";
+  renderTabs(); updateStatus();
+  if (currentView === "trends") renderTrends();
+  if (currentView === "history") renderHistory();
+}
+
+function updateStatus() {
+  const invoices = getInvoices(currentSupplier);
+  document.getElementById("status-text").textContent = invoices.length ? invoices.length + " invoice" + (invoices.length > 1 ? "s" : "") + " saved for " + currentSupplier : "No data yet for " + currentSupplier;
+  document.getElementById("clear-btn").style.display = invoices.length ? "block" : "none";
+  document.getElementById("upload-label").textContent = "Drop " + currentSupplier + " invoice PDF here";
+}
+
+async function clearSupplier() {
+  if (!confirm("Delete ALL saved invoices for " + currentSupplier + "? This cannot be undone.")) return;
+  await clearSupplierData(currentSupplier);
+  document.getElementById("results").innerHTML = ""; selectedItem = null;
+  renderTabs(); updateStatus();
+  if (currentView === "trends") renderTrends();
+  if (currentView === "history") renderHistory();
+}
+
 function onDragOver(e) { e.preventDefault(); document.getElementById("upload-zone").classList.add("drag"); }
 function onDragLeave() { document.getElementById("upload-zone").classList.remove("drag"); }
 function onDrop(e) { e.preventDefault(); onDragLeave(); startProcess(e.dataTransfer.files[0]); }
@@ -321,9 +475,10 @@ function showLoading(on) { document.getElementById("loading").style.display = on
 function showError(msg) { const el = document.getElementById("error"); el.textContent = msg; el.style.display = "block"; }
 function hideError() { document.getElementById("error").style.display = "none"; }
 function formatDate(d) { try { return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } }
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-renderTabs();
-updateStatus();
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+loadAllData().then(() => { renderTabs(); updateStatus(); });
 </script>
 </body>
 </html>
