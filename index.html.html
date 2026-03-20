@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sandwich Express — Price Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --gold: #d4a853; --bg: #0f0f0f; --surface: #161616; --surface2: #1e1e1e;
+    --border: #222; --text: #e8e0d0; --muted: #888; --dim: #555;
+    --red: #e05555; --green: #50c87a; --blue: #64a0dc; --orange: #e08c3a;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Mono', monospace; min-height: 100vh; padding: 28px 20px; }
+  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #1a1a1a; } ::-webkit-scrollbar-thumb { background: #444; }
+  .wrap { max-width: 720px; margin: 0 auto; }
+
+  /* HEADER */
+  .header { margin-bottom: 28px; display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+  .header-left h1 { font-family: 'Bebas Neue', sans-serif; font-size: clamp(30px,8vw,46px); letter-spacing: 3px; color: var(--gold); line-height: 1; }
+  .header-left p { font-size: 10px; letter-spacing: 3px; color: var(--dim); text-transform: uppercase; margin-top: 3px; }
+
+  /* TABS */
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .tab { background: none; border: 1px solid #333; color: var(--muted); padding: 7px 14px; cursor: pointer; font-family: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; transition: all 0.15s; border-radius: 2px; }
+  .tab:hover { border-color: var(--gold); color: var(--gold); }
+  .tab.active { background: var(--gold); border-color: var(--gold); color: #0f0f0f; font-weight: 500; }
+  .tab .dot { margin-left: 5px; opacity: 0.6; font-size: 8px; }
+
+  /* VIEW TOGGLE */
+  .view-toggle { display: flex; gap: 6px; margin-bottom: 16px; }
+  .vtab { background: none; border: 1px solid #2a2a2a; color: var(--dim); padding: 5px 12px; cursor: pointer; font-family: inherit; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; transition: all 0.15s; border-radius: 2px; }
+  .vtab:hover { border-color: var(--muted); color: var(--muted); }
+  .vtab.active { border-color: var(--muted); color: var(--text); }
+
+  /* STATUS */
+  .statusbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; font-size: 11px; color: var(--dim); flex-wrap: wrap; gap: 8px; }
+  .btn { background: none; border: 1px solid #444; color: var(--muted); padding: 5px 12px; cursor: pointer; font-family: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; transition: all 0.15s; border-radius: 2px; }
+  .btn:hover { border-color: var(--muted); color: var(--text); }
+  .btn-danger:hover { border-color: var(--red); color: var(--red); }
+
+  /* UPLOAD */
+  .upload-zone { border: 1px dashed #333; border-radius: 4px; padding: 40px 24px; text-align: center; cursor: pointer; transition: all 0.2s; }
+  .upload-zone:hover, .upload-zone.drag { border-color: var(--gold); background: rgba(212,168,83,0.04); }
+  .upload-zone .arrow { font-size: 28px; opacity: 0.3; margin-bottom: 10px; }
+  .upload-zone .label { font-size: 13px; color: var(--muted); margin-bottom: 5px; }
+  .upload-zone .hint { font-size: 11px; color: var(--dim); }
+  #file-input { display: none; }
+
+  /* DATE MODAL */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .modal { background: var(--surface); border: 1px solid #333; border-radius: 6px; padding: 28px; width: 100%; max-width: 340px; }
+  .modal h3 { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 2px; color: var(--gold); margin-bottom: 6px; }
+  .modal p { font-size: 11px; color: var(--muted); margin-bottom: 20px; line-height: 1.6; }
+  .modal input[type="date"] { width: 100%; background: var(--bg); border: 1px solid #333; color: var(--text); padding: 10px 12px; font-family: inherit; font-size: 13px; border-radius: 2px; margin-bottom: 16px; }
+  .modal input[type="date"]:focus { outline: none; border-color: var(--gold); }
+  .modal-btns { display: flex; gap: 8px; }
+  .btn-primary { background: var(--gold); border: none; color: #0f0f0f; padding: 10px 20px; cursor: pointer; font-family: inherit; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; font-weight: 500; border-radius: 2px; flex: 1; }
+  .btn-cancel { background: none; border: 1px solid #444; color: var(--muted); padding: 10px 20px; cursor: pointer; font-family: inherit; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; border-radius: 2px; }
+
+  /* LOADING */
+  .loading { text-align: center; padding: 56px 0; }
+  .loading .pulse { font-size: 11px; letter-spacing: 3px; color: var(--gold); text-transform: uppercase; animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:1} }
+
+  /* ERROR */
+  .error { background: rgba(220,80,80,0.08); border: 1px solid rgba(220,80,80,0.2); border-radius: 4px; padding: 14px; margin-top: 14px; font-size: 12px; color: var(--red); line-height: 1.5; }
+
+  /* RESULTS */
+  .results-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; flex-wrap: wrap; gap: 8px; }
+  .results-title { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 2px; }
+  .results-count { font-size: 11px; color: var(--dim); }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 18px; }
+  .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 14px 8px; text-align: center; }
+  .summary-num { font-family: 'Bebas Neue', sans-serif; font-size: 32px; line-height: 1; }
+  .summary-label { font-size: 9px; letter-spacing: 1.5px; color: var(--dim); text-transform: uppercase; margin-top: 3px; }
+
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 16px; margin-bottom: 12px; }
+  .section-title { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--dim); margin-bottom: 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1c1c1c; gap: 8px; }
+  .row:last-child { border-bottom: none; }
+  .row-name { font-size: 12px; color: #c8c0b0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-unit { font-size: 10px; color: var(--dim); flex-shrink: 0; }
+  .row-prices { font-size: 11px; color: #666; flex-shrink: 0; }
+  .row-price { font-size: 12px; color: var(--gold); flex-shrink: 0; }
+
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 2px; font-size: 10px; letter-spacing: 0.5px; flex-shrink: 0; }
+  .badge-up { background: rgba(220,80,80,0.12); color: var(--red); border: 1px solid rgba(220,80,80,0.25); }
+  .badge-down { background: rgba(80,180,120,0.12); color: var(--green); border: 1px solid rgba(80,180,120,0.25); }
+  .badge-new { background: rgba(100,160,220,0.12); color: var(--blue); border: 1px solid rgba(100,160,220,0.25); }
+  .badge-trend { background: rgba(224,140,58,0.12); color: var(--orange); border: 1px solid rgba(224,140,58,0.25); }
+
+  details summary { font-size: 10px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; cursor: pointer; user-select: none; padding: 8px 0; list-style: none; }
+  details summary::before { content: '▶ '; font-size: 8px; }
+  details[open] summary::before { content: '▼ '; }
+
+  /* TRENDS VIEW */
+  .trends-wrap { margin-top: 8px; }
+  .chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 16px; margin-bottom: 12px; }
+  .chart-container h3 { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--dim); margin-bottom: 14px; }
+  .search-wrap { position: relative; margin-bottom: 12px; }
+  .search-input { width: 100%; background: var(--bg); border: 1px solid #333; color: var(--text); padding: 9px 12px; font-family: inherit; font-size: 12px; border-radius: 2px; }
+  .search-input:focus { outline: none; border-color: var(--gold); }
+  .search-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: var(--surface2); border: 1px solid #333; border-top: none; border-radius: 0 0 2px 2px; max-height: 180px; overflow-y: auto; z-index: 10; }
+  .search-option { padding: 8px 12px; font-size: 11px; cursor: pointer; color: var(--muted); transition: all 0.1s; }
+  .search-option:hover { background: var(--surface); color: var(--text); }
+
+  .movers-list .row-name { font-size: 11px; }
+  .movers-list .row { padding: 6px 0; }
+
+  .history-item { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid #1c1c1c; gap: 8px; }
+  .history-item:last-child { border-bottom: none; }
+  .history-date { font-size: 12px; color: var(--text); }
+  .history-count { font-size: 11px; color: var(--dim); }
+  .history-del { background: none; border: none; color: #444; cursor: pointer; font-size: 14px; padding: 2px 6px; transition: color 0.15s; }
+  .history-del:hover { color: var(--red); }
+
+  .empty-state { text-align: center; padding: 40px 20px; font-size: 12px; color: var(--dim); line-height: 1.8; }
+
+  @media (max-width: 480px) {
+    body { padding: 18px 14px; }
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .row-prices { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="header-left">
+      <h1>Sandwich Express</h1>
+      <p>Invoice Price Tracker</p>
+    </div>
+  </div>
+
+  <!-- Supplier Tabs -->
+  <div class="tabs" id="supplier-tabs"></div>
+
+  <!-- View Toggle -->
+  <div class="view-toggle">
+    <button class="vtab active" id="vtab-upload" onclick="setView('upload')">Upload</button>
+    <button class="vtab" id="vtab-trends" onclick="setView('trends')">Trends</button>
+    <button class="vtab" id="vtab-history" onclick="setView('history')">History</button>
+  </div>
+
+  <div class="statusbar">
+    <span id="status-text"></span>
+    <button class="btn btn-danger" id="clear-btn" style="display:none" onclick="clearSupplier()">Clear All Data</button>
+  </div>
+
+  <!-- Upload View -->
+  <div id="view-upload">
+    <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()" ondragover="onDragOver(event)" ondragleave="onDragLeave()" ondrop="onDrop(event)">
+      <input type="file" id="file-input" accept="application/pdf" onchange="startProcess(this.files[0])">
+      <div class="arrow">↑</div>
+      <div class="label" id="upload-label">Drop invoice PDF here</div>
+      <div class="hint">or tap to browse</div>
+    </div>
+    <div class="loading" id="loading" style="display:none"><div class="pulse">Reading invoice...</div></div>
+    <div class="error" id="error" style="display:none"></div>
+    <div id="results" style="margin-top:20px"></div>
+  </div>
+
+  <!-- Trends View -->
+  <div id="view-trends" style="display:none">
+    <div class="trends-wrap">
+      <div class="chart-container">
+        <h3>Price Over Time</h3>
+        <div class="search-wrap">
+          <input type="text" class="search-input" id="item-search" placeholder="Search for an item..." oninput="onItemSearch()" onblur="hideDropdown()" autocomplete="off">
+          <div class="search-dropdown" id="search-dropdown" style="display:none"></div>
+        </div>
+        <canvas id="price-chart" height="200"></canvas>
+      </div>
+      <div class="section">
+        <div class="section-title">🔺 Biggest Movers (Total % Change)</div>
+        <div id="movers-list" class="movers-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- History View -->
+  <div id="view-history" style="display:none">
+    <div class="section">
+      <div class="section-title">Invoice History</div>
+      <div id="history-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Date Modal -->
+<div class="modal-bg" id="date-modal" style="display:none">
+  <div class="modal">
+    <h3>Invoice Date</h3>
+    <p>Enter the date on this invoice so prices are tracked in the right order.</p>
+    <input type="date" id="invoice-date">
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="cancelUpload()">Cancel</button>
+      <button class="btn-primary" onclick="confirmDate()">Process Invoice</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const API_KEY = "YOUR_KEY_HERE";
+const MAX_INVOICES = 30;
+const SUPPLIERS = ["Sysco", "WebstaurantStore", "Rinella Produce"];
+const STORAGE_KEY = "se_tracker_v2";
+const FUZZY_THRESHOLD = 0.78;
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let currentSupplier = SUPPLIERS[0];
+let currentView = "upload";
+let pendingFile = null;
+let priceChart = null;
+let selectedItem = null;
+
+// ─── STORAGE ──────────────────────────────────────────────────────────────────
+function loadData() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
+}
+function saveData(d) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); } catch {}
+}
+function getInvoices(supplier) {
+  return (loadData()[supplier] || []).sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+function saveInvoice(supplier, date, items) {
+  const d = loadData();
+  if (!d[supplier]) d[supplier] = [];
+  // Remove existing entry for same date if any
+  d[supplier] = d[supplier].filter(inv => inv.date !== date);
+  d[supplier].push({ date, items });
+  // Sort and trim to MAX_INVOICES
+  d[supplier].sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (d[supplier].length > MAX_INVOICES) d[supplier] = d[supplier].slice(-MAX_INVOICES);
+  saveData(d);
+}
+function deleteInvoice(supplier, date) {
+  const d = loadData();
+  if (!d[supplier]) return;
+  d[supplier] = d[supplier].filter(inv => inv.date !== date);
+  saveData(d);
+}
+
+// ─── FUZZY MATCHING ───────────────────────────────────────────────────────────
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m+1}, (_, i) => Array.from({length: n+1}, (_, j) => i === 0 ? j : j === 0 ? i : 0));
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+    dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+function similarity(a, b) {
+  a = a.toLowerCase().trim(); b = b.toLowerCase().trim();
+  if (a === b) return 1;
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+  return 1 - levenshtein(a, b) / maxLen;
+}
+function findMatch(name, items) {
+  let best = null, bestScore = 0;
+  for (const item of items) {
+    const s = similarity(name, item.name);
+    if (s > bestScore) { bestScore = s; best = item; }
+  }
+  return bestScore >= FUZZY_THRESHOLD ? best : null;
+}
+
+// ─── API CALL ─────────────────────────────────────────────────────────────────
+async function extractItems(base64) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": API_KEY,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-calls": "true"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1500,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+          { type: "text", text: `This document contains a food supplier invoice from ${currentSupplier}. It may be a clean PDF, a saved email, or a forwarded Gmail thread — ignore all email headers, forwarding info, timestamps, and Gmail chrome. Focus only on the actual order/invoice line items. Extract every food/supply product with its unit price. Rules: (1) Use the Price($) column — per-unit price NOT the extended total. (2) Some rows show two numbers stacked in the price cell like "NaN" followed by a real number — always use the real number and ignore NaN. (3) Prices may appear as $47.49, (47.49), or ($47.49) — extract just the number. (4) Never output NaN as a price — skip the item if no valid price exists. (5) Normalize all item names to clean consistent readable format e.g. "Cheese Cheddar Sliced .75oz" not "CHSE CHDR SLC .75OZ". Respond ONLY with a raw JSON array, no markdown, no backticks, no explanation. Format: [{"name":"item name","price":0.00,"unit":"CS/EA/LB/GAL"}]` }
+        ]
+      }]
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  const text = (data.content || []).find(b => b.type === "text")?.text || "[]";
+  try { return JSON.parse(text.replace(/```json|```/g, "").trim()); }
+  catch { return []; }
+}
+
+// ─── COMPARE ──────────────────────────────────────────────────────────────────
+function compareInvoices(previous, current) {
+  const changes = [];
+  for (const item of current) {
+    const prev = findMatch(item.name, previous);
+    if (prev) {
+      const diff = item.price - prev.price;
+      const pct = prev.price > 0 ? (diff / prev.price) * 100 : 0;
+      if (Math.abs(pct) >= 0.5) changes.push({ ...item, oldPrice: prev.price, pct });
+    } else {
+      changes.push({ ...item, oldPrice: null, pct: null });
+    }
+  }
+  return changes;
+}
+
+// ─── TREND DETECTION ──────────────────────────────────────────────────────────
+function getConsecutiveIncreases(itemName, invoices) {
+  const prices = [];
+  for (const inv of invoices) {
+    const match = findMatch(itemName, inv.items);
+    if (match) prices.push(match.price);
+  }
+  let streak = 0;
+  for (let i = prices.length - 1; i > 0; i--) {
+    if (prices[i] > prices[i-1]) streak++;
+    else break;
+  }
+  return streak;
+}
+
+// ─── FILE HANDLING ────────────────────────────────────────────────────────────
+function startProcess(file) {
+  if (!file || file.type !== "application/pdf") { showError("Please upload a PDF file."); return; }
+  pendingFile = file;
+  const today = new Date().toISOString().split("T")[0];
+  document.getElementById("invoice-date").value = today;
+  document.getElementById("date-modal").style.display = "flex";
+}
+function cancelUpload() {
+  pendingFile = null;
+  document.getElementById("date-modal").style.display = "none";
+  document.getElementById("file-input").value = "";
+}
+async function confirmDate() {
+  const date = document.getElementById("invoice-date").value;
+  if (!date) { alert("Please enter a date."); return; }
+  document.getElementById("date-modal").style.display = "none";
+  document.getElementById("file-input").value = "";
+  await processFile(pendingFile, date);
+  pendingFile = null;
+}
+
+async function processFile(file, date) {
+  showLoading(true);
+  hideError();
+  document.getElementById("results").innerHTML = "";
+  try {
+    const base64 = await fileToBase64(file);
+    const items = await extractItems(base64);
+    if (!items.length) throw new Error("No items found. Try a different PDF or check that it's a real invoice.");
+    const invoices = getInvoices(currentSupplier);
+    const previous = invoices.length ? invoices[invoices.length - 1].items : [];
+    const changes = previous.length ? compareInvoices(previous, items) : [];
+    saveInvoice(currentSupplier, date, items);
+    renderResults(items, changes, previous.length === 0, date);
+    renderTabs();
+    updateStatus();
+  } catch(e) {
+    showError(e.message || "Something went wrong. Check your API key or try again.");
+  } finally {
+    showLoading(false);
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(",")[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+// ─── RENDER RESULTS ───────────────────────────────────────────────────────────
+function renderResults(items, changes, isFirst, date) {
+  const container = document.getElementById("results");
+  const invoices = getInvoices(currentSupplier);
+  let html = `<div class="results-header"><div class="results-title">${currentSupplier} — ${formatDate(date)}</div><div class="results-count">${items.length} items</div></div>`;
+
+  if (isFirst) {
+    html += `<div class="section"><p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">✓ Baseline saved. Upload the next invoice to start tracking changes.</p>`;
+    html += items.map(i => itemRow(i.name, i.unit, null, i.price, null, false)).join('');
+    html += `</div>`;
+  } else {
+    const increases = changes.filter(c => c.pct !== null && c.pct > 0).sort((a,b) => b.pct - a.pct);
+    const decreases = changes.filter(c => c.pct !== null && c.pct < 0).sort((a,b) => a.pct - b.pct);
+    const newItems = changes.filter(c => c.pct === null);
+    const trending = increases.filter(c => getConsecutiveIncreases(c.name, invoices) >= 3);
+
+    html += `<div class="summary-grid">
+      <div class="summary-card"><div class="summary-num" style="color:var(--red)">${increases.length}</div><div class="summary-label">Increases</div></div>
+      <div class="summary-card"><div class="summary-num" style="color:var(--green)">${decreases.length}</div><div class="summary-label">Decreases</div></div>
+      <div class="summary-card"><div class="summary-num" style="color:var(--blue)">${newItems.length}</div><div class="summary-label">New Items</div></div>
+      <div class="summary-card"><div class="summary-num" style="color:var(--orange)">${trending.length}</div><div class="summary-label">Trending ↑</div></div>
+    </div>`;
+
+    if (trending.length) {
+      html += `<div class="section"><div class="section-title">🔺 Trending Up 3+ Invoices in a Row</div>`;
+      html += trending.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, true)).join('');
+      html += `</div>`;
+    }
+    if (increases.length) {
+      html += `<div class="section"><div class="section-title">⬆ Price Increases</div>`;
+      html += increases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, false)).join('');
+      html += `</div>`;
+    }
+    if (decreases.length) {
+      html += `<div class="section"><div class="section-title">⬇ Price Decreases</div>`;
+      html += decreases.map(c => itemRow(c.name, c.unit, c.oldPrice, c.price, c.pct, false)).join('');
+      html += `</div>`;
+    }
+    if (newItems.length) {
+      html += `<div class="section"><div class="section-title">★ New Items</div>`;
+      html += newItems.map(c => itemRow(c.name, c.unit, null, c.price, null, false)).join('');
+      html += `</div>`;
+    }
+    if (!changes.length) {
+      html += `<div class="section"><p style="font-size:12px;color:var(--muted);text-align:center;padding:8px 0">No significant price changes detected.</p></div>`;
+    }
+
+    html += `<details><summary>All Items (${items.length})</summary><div class="section" style="margin-top:10px">`;
+    html += items.map(i => itemRow(i.name, i.unit, null, i.price, null, false)).join('');
+    html += `</div></details>`;
+  }
+  container.innerHTML = html;
+}
+
+function itemRow(name, unit, oldPrice, price, pct, trending) {
+  let badge = '';
+  if (trending) badge = `<span class="badge badge-trend">🔺 trending</span>`;
+  else if (pct === null && oldPrice === null) badge = `<span class="badge badge-new">new</span>`;
+  else if (pct > 0) badge = `<span class="badge badge-up">+${pct.toFixed(1)}%</span>`;
+  else if (pct < 0) badge = `<span class="badge badge-down">${pct.toFixed(1)}%</span>`;
+  const pricesHtml = oldPrice !== null ? `<span class="row-prices">$${Number(oldPrice).toFixed(2)} → $${Number(price).toFixed(2)}</span>` : `<span class="row-price">$${Number(price).toFixed(2)}</span>`;
+  return `<div class="row"><span class="row-name" title="${esc(name)}">${esc(name)}</span><span class="row-unit">${esc(unit||'')}</span>${pricesHtml}${badge}</div>`;
+}
+
+// ─── TRENDS VIEW ──────────────────────────────────────────────────────────────
+function renderTrends() {
+  const invoices = getInvoices(currentSupplier);
+  if (!invoices.length) {
+    document.getElementById("movers-list").innerHTML = `<p class="empty-state">No invoice data yet for ${currentSupplier}.</p>`;
+    if (priceChart) { priceChart.destroy(); priceChart = null; }
+    return;
+  }
+
+  // Biggest movers
+  const allItems = {};
+  for (const inv of invoices) {
+    for (const item of inv.items) {
+      const key = item.name.toLowerCase();
+      if (!allItems[key]) allItems[key] = { name: item.name, prices: [] };
+      allItems[key].prices.push(item.price);
+    }
+  }
+  const movers = Object.values(allItems)
+    .filter(i => i.prices.length >= 2)
+    .map(i => {
+      const first = i.prices[0], last = i.prices[i.prices.length - 1];
+      const pct = first > 0 ? ((last - first) / first) * 100 : 0;
+      return { ...i, pct, first, last };
+    })
+    .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
+    .slice(0, 10);
+
+  let moversHtml = '';
+  if (movers.length) {
+    moversHtml = movers.map(m => {
+      const badge = m.pct > 0 ? `<span class="badge badge-up">+${m.pct.toFixed(1)}%</span>` : `<span class="badge badge-down">${m.pct.toFixed(1)}%</span>`;
+      return `<div class="row"><span class="row-name" title="${esc(m.name)}">${esc(m.name)}</span><span class="row-prices">$${m.first.toFixed(2)} → $${m.last.toFixed(2)}</span>${badge}</div>`;
+    }).join('');
+  } else {
+    moversHtml = `<p style="font-size:12px;color:var(--dim);text-align:center;padding:8px 0">Need at least 2 invoices to show movers.</p>`;
+  }
+  document.getElementById("movers-list").innerHTML = moversHtml;
+
+  // Init empty chart
+  if (!selectedItem) renderChart(null, invoices);
+}
+
+function renderChart(itemName, invoices) {
+  const ctx = document.getElementById("price-chart").getContext("2d");
+  if (priceChart) { priceChart.destroy(); priceChart = null; }
+  if (!itemName || !invoices.length) {
+    priceChart = new Chart(ctx, {
+      type: "line",
+      data: { labels: [], datasets: [{ data: [], borderColor: "#d4a853", backgroundColor: "rgba(212,168,83,0.08)", tension: 0.3, pointBackgroundColor: "#d4a853" }] },
+      options: chartOptions("Search for an item above to see its price history")
+    });
+    return;
+  }
+  const labels = [], prices = [];
+  for (const inv of invoices) {
+    const match = findMatch(itemName, inv.items);
+    if (match) { labels.push(formatDate(inv.date)); prices.push(match.price); }
+  }
+  priceChart = new Chart(ctx, {
+    type: "line",
+    data: { labels, datasets: [{ label: itemName, data: prices, borderColor: "#d4a853", backgroundColor: "rgba(212,168,83,0.08)", tension: 0.3, pointBackgroundColor: "#d4a853", pointRadius: 4, pointHoverRadius: 6 }] },
+    options: chartOptions(itemName)
+  });
+}
+
+function chartOptions(title) {
+  return {
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+      title: { display: false },
+      tooltip: { callbacks: { label: ctx => `$${ctx.parsed.y.toFixed(2)}` }, backgroundColor: "#1e1e1e", titleColor: "#888", bodyColor: "#e8e0d0", borderColor: "#333", borderWidth: 1 }
+    },
+    scales: {
+      x: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 } }, grid: { color: "#1a1a1a" } },
+      y: { ticks: { color: "#555", font: { family: "DM Mono", size: 10 }, callback: v => `$${v.toFixed(2)}` }, grid: { color: "#1a1a1a" } }
+    }
+  };
+}
+
+function onItemSearch() {
+  const q = document.getElementById("item-search").value.toLowerCase().trim();
+  const invoices = getInvoices(currentSupplier);
+  if (!q || !invoices.length) { hideDropdown(); return; }
+  const allNames = new Set();
+  for (const inv of invoices) for (const item of inv.items) allNames.add(item.name);
+  const matches = [...allNames].filter(n => n.toLowerCase().includes(q)).slice(0, 12);
+  if (!matches.length) { hideDropdown(); return; }
+  const dd = document.getElementById("search-dropdown");
+  dd.innerHTML = matches.map(n => `<div class="search-option" onmousedown="selectItem('${esc(n)}')">${esc(n)}</div>`).join('');
+  dd.style.display = "block";
+}
+function hideDropdown() { setTimeout(() => { document.getElementById("search-dropdown").style.display = "none"; }, 150); }
+function selectItem(name) {
+  selectedItem = name;
+  document.getElementById("item-search").value = name;
+  hideDropdown();
+  renderChart(name, getInvoices(currentSupplier));
+}
+
+// ─── HISTORY VIEW ─────────────────────────────────────────────────────────────
+function renderHistory() {
+  const invoices = getInvoices(currentSupplier).slice().reverse();
+  const container = document.getElementById("history-list");
+  if (!invoices.length) {
+    container.innerHTML = `<p class="empty-state">No invoices saved yet for ${currentSupplier}.</p>`;
+    return;
+  }
+  container.innerHTML = invoices.map(inv => `
+    <div class="history-item">
+      <span class="history-date">${formatDate(inv.date)}</span>
+      <span class="history-count">${inv.items.length} items</span>
+      <button class="history-del" onclick="confirmDeleteInvoice('${inv.date}')" title="Delete">✕</button>
+    </div>`).join('');
+}
+function confirmDeleteInvoice(date) {
+  if (!confirm(`Delete invoice from ${formatDate(date)}?`)) return;
+  deleteInvoice(currentSupplier, date);
+  renderHistory();
+  renderTabs();
+  updateStatus();
+}
+
+// ─── UI HELPERS ───────────────────────────────────────────────────────────────
+function setView(v) {
+  currentView = v;
+  ["upload","trends","history"].forEach(id => {
+    document.getElementById(`view-${id}`).style.display = id === v ? "block" : "none";
+    document.getElementById(`vtab-${id}`).classList.toggle("active", id === v);
+  });
+  if (v === "trends") renderTrends();
+  if (v === "history") renderHistory();
+}
+
+function renderTabs() {
+  const d = loadData();
+  document.getElementById("supplier-tabs").innerHTML = SUPPLIERS.map(s => `
+    <button class="tab ${s === currentSupplier ? 'active' : ''}" onclick="selectSupplier('${s}')">
+      ${s}${d[s]?.length ? '<span class="dot">●</span>' : ''}
+    </button>`).join('');
+}
+
+function selectSupplier(s) {
+  currentSupplier = s;
+  selectedItem = null;
+  document.getElementById("results").innerHTML = "";
+  document.getElementById("error").style.display = "none";
+  if (document.getElementById("item-search")) document.getElementById("item-search").value = "";
+  renderTabs();
+  updateStatus();
+  if (currentView === "trends") renderTrends();
+  if (currentView === "history") renderHistory();
+}
+
+function updateStatus() {
+  const invoices = getInvoices(currentSupplier);
+  document.getElementById("status-text").textContent = invoices.length
+    ? `${invoices.length} invoice${invoices.length > 1 ? 's' : ''} saved for ${currentSupplier}`
+    : `No data yet for ${currentSupplier}`;
+  document.getElementById("clear-btn").style.display = invoices.length ? "block" : "none";
+  document.getElementById("upload-label").textContent = `Drop ${currentSupplier} invoice PDF here`;
+}
+
+function clearSupplier() {
+  if (!confirm(`Delete ALL saved invoices for ${currentSupplier}? This cannot be undone.`)) return;
+  const d = loadData(); delete d[currentSupplier]; saveData(d);
+  document.getElementById("results").innerHTML = "";
+  selectedItem = null;
+  renderTabs(); updateStatus();
+  if (currentView === "trends") renderTrends();
+  if (currentView === "history") renderHistory();
+}
+
+function onDragOver(e) { e.preventDefault(); document.getElementById("upload-zone").classList.add("drag"); }
+function onDragLeave() { document.getElementById("upload-zone").classList.remove("drag"); }
+function onDrop(e) { e.preventDefault(); onDragLeave(); startProcess(e.dataTransfer.files[0]); }
+function showLoading(on) {
+  document.getElementById("loading").style.display = on ? "block" : "none";
+  document.getElementById("upload-zone").style.display = on ? "none" : "block";
+}
+function showError(msg) { const el = document.getElementById("error"); el.textContent = msg; el.style.display = "block"; }
+function hideError() { document.getElementById("error").style.display = "none"; }
+function formatDate(d) { try { return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+renderTabs();
+updateStatus();
+</script>
+</body>
+</html>
